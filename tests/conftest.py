@@ -18,18 +18,38 @@ import os
 
 @pytest.fixture
 def sample_documents() -> List[str]:
-    """Sample documents for topic modeling tests."""
+    """Sample documents for topic modeling tests.
+
+    Note: Must have more documents than UMAP n_neighbors (15) to avoid
+    spectral embedding errors.
+    """
     return [
+        # AI/ML cluster
         "We are investing heavily in artificial intelligence and machine learning capabilities.",
         "Our AI initiatives have shown strong results in customer engagement.",
         "The company is expanding its machine learning infrastructure.",
+        "Deep learning models are driving product improvements.",
+        "Neural networks power our recommendation systems.",
+        "AI-driven automation has improved operational efficiency.",
+        # Revenue/Growth cluster
         "Revenue growth exceeded expectations this quarter.",
         "We saw strong performance in our cloud computing segment.",
+        "Profit margins have expanded due to cost optimization.",
+        "Sales increased by fifteen percent year over year.",
+        "Our subscription revenue continues to grow rapidly.",
+        "Customer lifetime value has improved significantly.",
+        # Supply Chain cluster
         "Supply chain disruptions continue to impact our operations.",
         "We are diversifying our supply chain to reduce risk.",
         "Logistics costs have increased due to global shipping constraints.",
+        "Inventory management improvements are underway.",
+        "We have secured alternative suppliers in key regions.",
+        "Manufacturing capacity is being expanded globally.",
+        # Digital/Customer cluster
         "Our digital transformation strategy is progressing well.",
         "Customer acquisition costs have decreased significantly.",
+        "User engagement metrics show positive trends.",
+        "Mobile app downloads reached record levels.",
     ]
 
 
@@ -112,15 +132,19 @@ def mock_topic_model(mock_topic_model_result):
 
 @pytest.fixture
 def sample_csv_content() -> str:
-    """Sample CSV content matching the expected schema."""
+    """Sample CSV content matching the expected schema.
+
+    Note: Each componenttext contains MULTIPLE sentences to test sentence splitting.
+    This mimics the real CSV where components are transcript chunks, not sentences.
+    """
     return """companyid,companyname,transcriptid,componenttext,componentorder,mostimportantdateutc,speakertypename
-1001,Apple Inc.,T001,"We are investing heavily in AI and machine learning.",1,2023-01-15,CEO
-1001,Apple Inc.,T001,"Revenue growth has been exceptional.",2,2023-01-15,CFO
-1001,Apple Inc.,T001,"Supply chain remains stable.",3,2023-01-15,COO
-1002,Microsoft Corp.,T002,"Cloud computing continues to drive growth.",1,2023-01-20,CEO
-1002,Microsoft Corp.,T002,"We see strong demand for AI services.",2,2023-01-20,CTO
-1003,Tesla Inc.,T003,"Vehicle production exceeded targets.",1,2023-02-01,CEO
-1003,Tesla Inc.,T003,"Battery technology advances continue.",2,2023-02-01,CTO
+1001,Apple Inc.,T001,"We are investing heavily in AI and machine learning. Our research team has made significant breakthroughs. This will drive future growth.",1,2023-01-15,CEO
+1001,Apple Inc.,T001,"Revenue growth has been exceptional. We exceeded analyst expectations. Margins expanded significantly.",2,2023-01-15,CFO
+1001,Apple Inc.,T001,"Supply chain remains stable. We have diversified our suppliers. Logistics costs are under control.",3,2023-01-15,COO
+1002,Microsoft Corp.,T002,"Cloud computing continues to drive growth. Azure adoption is accelerating. Enterprise customers are expanding deployments.",1,2023-01-20,CEO
+1002,Microsoft Corp.,T002,"We see strong demand for AI services. Copilot adoption exceeded expectations. Developer productivity has improved.",2,2023-01-20,CTO
+1003,Tesla Inc.,T003,"Vehicle production exceeded targets. Manufacturing efficiency has improved. We opened new facilities.",1,2023-02-01,CEO
+1003,Tesla Inc.,T003,"Battery technology advances continue. Energy density has increased. Cost per kilowatt-hour has decreased.",2,2023-02-01,CTO
 """
 
 

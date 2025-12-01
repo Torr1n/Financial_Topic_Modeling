@@ -66,25 +66,25 @@ class TestDataConnectorInterface:
         from cloud.src.interfaces import DataConnector
 
         class MissingFetch(DataConnector):
-            def get_available_firms(self) -> List[str]:
+            def get_available_firm_ids(self) -> List[str]:
                 return []
 
         with pytest.raises(TypeError):
             MissingFetch()
 
-    def test_data_connector_requires_get_available_firms(self):
-        """DataConnector should require get_available_firms method."""
+    def test_data_connector_requires_get_available_firm_ids(self):
+        """DataConnector should require get_available_firm_ids method."""
         from cloud.src.interfaces import DataConnector
         from cloud.src.models import TranscriptData
 
-        class MissingGetFirms(DataConnector):
+        class MissingGetFirmIds(DataConnector):
             def fetch_transcripts(
-                self, firms: List[str], start_date: str, end_date: str
+                self, firm_ids: List[str], start_date: str, end_date: str
             ) -> TranscriptData:
                 return TranscriptData(firms={})
 
         with pytest.raises(TypeError):
-            MissingGetFirms()
+            MissingGetFirmIds()
 
     def test_data_connector_close_has_default(self):
         """DataConnector.close should have a default no-op implementation."""
@@ -93,11 +93,11 @@ class TestDataConnectorInterface:
 
         class MinimalConnector(DataConnector):
             def fetch_transcripts(
-                self, firms: List[str], start_date: str, end_date: str
+                self, firm_ids: List[str], start_date: str, end_date: str
             ) -> TranscriptData:
                 return TranscriptData(firms={})
 
-            def get_available_firms(self) -> List[str]:
+            def get_available_firm_ids(self) -> List[str]:
                 return []
 
         connector = MinimalConnector()
@@ -111,22 +111,22 @@ class TestDataConnectorInterface:
 
         class TestConnector(DataConnector):
             def fetch_transcripts(
-                self, firms: List[str], start_date: str, end_date: str
+                self, firm_ids: List[str], start_date: str, end_date: str
             ) -> TranscriptData:
                 # Create mock data
-                sentences = [TranscriptSentence("TEST_001", "Test sentence.", "CEO", 0)]
+                sentences = [TranscriptSentence("1001_T001_0001", "Test sentence.", "CEO", 0)]
                 firm = FirmTranscriptData("1001", "Test Corp", sentences)
                 return TranscriptData(firms={"1001": firm})
 
-            def get_available_firms(self) -> List[str]:
-                return ["Test Corp"]
+            def get_available_firm_ids(self) -> List[str]:
+                return ["1001"]
 
         connector = TestConnector()
-        result = connector.fetch_transcripts(["Test Corp"], "2023-01-01", "2023-03-31")
+        result = connector.fetch_transcripts(["1001"], "2023-01-01", "2023-03-31")
 
         assert isinstance(result, TranscriptData)
         assert "1001" in result.firms
-        assert connector.get_available_firms() == ["Test Corp"]
+        assert connector.get_available_firm_ids() == ["1001"]
 
 
 class TestInterfaceMethodSignatures:
@@ -157,9 +157,9 @@ class TestInterfaceMethodSignatures:
         sig = inspect.signature(DataConnector.fetch_transcripts)
         params = list(sig.parameters.keys())
 
-        # Should have self, firms, start_date, end_date parameters
+        # Should have self, firm_ids, start_date, end_date parameters
         assert "self" in params
-        assert "firms" in params
+        assert "firm_ids" in params
         assert "start_date" in params
         assert "end_date" in params
 

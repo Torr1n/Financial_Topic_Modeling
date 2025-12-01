@@ -86,13 +86,13 @@ class TestS3TranscriptConnectorStub:
         connector = S3TranscriptConnector(bucket="test", key="test.csv")
 
         with pytest.raises(NotImplementedError):
-            connector.fetch_transcripts(["Firm"], "2023-01-01", "2023-03-31")
+            connector.fetch_transcripts(["1001"], "2023-01-01", "2023-03-31")
 
-    def test_get_available_firms_raises_not_implemented(self):
-        """get_available_firms should raise NotImplementedError."""
+    def test_get_available_firm_ids_raises_not_implemented(self):
+        """get_available_firm_ids should raise NotImplementedError."""
         from cloud.src.connectors.s3_connector import S3TranscriptConnector
 
         connector = S3TranscriptConnector(bucket="test", key="test.csv")
 
         with pytest.raises(NotImplementedError):
-            connector.get_available_firms()
+            connector.get_available_firm_ids()
