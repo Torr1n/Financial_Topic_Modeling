@@ -44,12 +44,17 @@ class S3TranscriptConnector(DataConnector):
 
     def fetch_transcripts(
         self,
-        firms: List[str],
+        firm_ids: List[str],
         start_date: str,
         end_date: str,
     ) -> TranscriptData:
         """
         Fetch transcripts from S3.
+
+        Args:
+            firm_ids: List of firm IDs to fetch
+            start_date: YYYY-MM-DD format (inclusive)
+            end_date: YYYY-MM-DD format (inclusive)
 
         Raises:
             NotImplementedError: Phase 2 implementation pending
@@ -59,9 +64,9 @@ class S3TranscriptConnector(DataConnector):
             "This is a Phase 2 deliverable."
         )
 
-    def get_available_firms(self) -> List[str]:
+    def get_available_firm_ids(self) -> List[str]:
         """
-        List available firms in S3 data.
+        List available firm IDs in S3 data.
 
         Raises:
             NotImplementedError: Phase 2 implementation pending

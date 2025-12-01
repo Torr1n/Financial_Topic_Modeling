@@ -66,7 +66,7 @@ class DataConnector(ABC):
     @abstractmethod
     def fetch_transcripts(
         self,
-        firms: List[str],
+        firm_ids: List[str],
         start_date: str,
         end_date: str,
     ) -> TranscriptData:
@@ -74,7 +74,7 @@ class DataConnector(ABC):
         Fetch transcript sentences for specified firms and date range.
 
         Args:
-            firms: List of company names (case-insensitive matching)
+            firm_ids: List of firm IDs (companyid from data source)
             start_date: YYYY-MM-DD format (inclusive)
             end_date: YYYY-MM-DD format (inclusive)
 
@@ -84,12 +84,12 @@ class DataConnector(ABC):
         pass
 
     @abstractmethod
-    def get_available_firms(self) -> List[str]:
+    def get_available_firm_ids(self) -> List[str]:
         """
-        List all firms available in the data source.
+        List all firm IDs available in the data source.
 
         Returns:
-            List of firm names available for querying
+            List of firm IDs available for querying
         """
         pass
 
