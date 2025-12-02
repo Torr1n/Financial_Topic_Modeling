@@ -181,6 +181,90 @@ def temp_csv_file(sample_csv_content) -> str:
 
 
 # =============================================================================
+# Firm Topic Output Fixtures (for ThemeAggregator tests)
+# =============================================================================
+
+@pytest.fixture
+def sample_firm_topic_outputs() -> List[Dict[str, Any]]:
+    """Sample FirmTopicOutput dicts for testing ThemeAggregator.
+
+    Creates 3 firms with 2 topics each (6 total topics).
+    This enables testing cross-firm theme aggregation.
+    """
+    return [
+        {
+            "firm_id": "1001",
+            "firm_name": "Apple Inc.",
+            "n_topics": 2,
+            "topics": [
+                {
+                    "topic_id": 0,
+                    "representation": "ai investment strategy",
+                    "keywords": ["ai", "investment", "strategy"],
+                    "size": 25,
+                    "sentence_ids": ["1001_T001_0001", "1001_T001_0002"],
+                },
+                {
+                    "topic_id": 1,
+                    "representation": "revenue growth quarterly",
+                    "keywords": ["revenue", "growth", "quarterly"],
+                    "size": 18,
+                    "sentence_ids": ["1001_T001_0003", "1001_T001_0004"],
+                },
+            ],
+            "outlier_sentence_ids": ["1001_T001_0005"],
+            "metadata": {"processing_timestamp": "2024-12-01T12:00:00Z"},
+        },
+        {
+            "firm_id": "1002",
+            "firm_name": "Microsoft Corp.",
+            "n_topics": 2,
+            "topics": [
+                {
+                    "topic_id": 0,
+                    "representation": "cloud computing azure",
+                    "keywords": ["cloud", "computing", "azure"],
+                    "size": 30,
+                    "sentence_ids": ["1002_T001_0001", "1002_T001_0002"],
+                },
+                {
+                    "topic_id": 1,
+                    "representation": "ai machine learning",
+                    "keywords": ["ai", "machine", "learning"],
+                    "size": 22,
+                    "sentence_ids": ["1002_T001_0003", "1002_T001_0004"],
+                },
+            ],
+            "outlier_sentence_ids": [],
+            "metadata": {"processing_timestamp": "2024-12-01T12:00:00Z"},
+        },
+        {
+            "firm_id": "1003",
+            "firm_name": "Tesla Inc.",
+            "n_topics": 2,
+            "topics": [
+                {
+                    "topic_id": 0,
+                    "representation": "electric vehicle production",
+                    "keywords": ["electric", "vehicle", "production"],
+                    "size": 28,
+                    "sentence_ids": ["1003_T001_0001", "1003_T001_0002"],
+                },
+                {
+                    "topic_id": 1,
+                    "representation": "battery technology energy",
+                    "keywords": ["battery", "technology", "energy"],
+                    "size": 20,
+                    "sentence_ids": ["1003_T001_0003", "1003_T001_0004"],
+                },
+            ],
+            "outlier_sentence_ids": ["1003_T001_0005"],
+            "metadata": {"processing_timestamp": "2024-12-01T12:00:00Z"},
+        },
+    ]
+
+
+# =============================================================================
 # Validation Helpers
 # =============================================================================
 
@@ -194,6 +278,24 @@ def validate_firm_topic_output():
 
         for topic in output["topics"]:
             topic_keys = ["topic_id", "representation", "keywords", "size", "sentence_ids"]
+            if not all(k in topic for k in topic_keys):
+                return False
+
+        return True
+
+    return _validate
+
+
+@pytest.fixture
+def validate_theme_output():
+    """Validator for ThemeOutput schema."""
+    def _validate(output: dict) -> bool:
+        required_keys = ["theme_id", "name", "keywords", "n_firms", "n_topics", "topics", "metadata"]
+        if not all(k in output for k in required_keys):
+            return False
+
+        for topic in output["topics"]:
+            topic_keys = ["firm_id", "topic_id", "representation", "size"]
             if not all(k in topic for k in topic_keys):
                 return False
 

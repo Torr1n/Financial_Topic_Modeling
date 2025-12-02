@@ -1,0 +1,11 @@
+# Claude Code
+.claude/
+
+# Legacy MVP code
+Local_BERTopic_MVP/
+
+# Python virtual environment
+venv/
+
+# Pytest cache
+.pytest_cache/
