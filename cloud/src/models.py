@@ -99,9 +99,10 @@ class TopicModelResult:
         n_topics: Number of topics discovered (excluding outliers)
         topic_representations: Human-readable description per topic
         topic_keywords: Top keywords per topic
+        probabilities: Topic probability distribution per document (n_docs, n_topics)
+                       Required for downstream processing (sentence ordering, etc.)
 
     Optional Attributes:
-        probabilities: Topic probability distribution per document (LDA/neural)
         topic_sizes: Document count per topic
         metadata: Model-specific debugging/audit info
     """
@@ -111,9 +112,9 @@ class TopicModelResult:
     n_topics: int  # Number of topics discovered (excluding outliers)
     topic_representations: Dict[int, str]  # topic_id -> human-readable name
     topic_keywords: Dict[int, List[str]]  # topic_id -> top keywords
+    probabilities: np.ndarray  # (n_docs, n_topics) - full topic distribution
 
     # Optional: Model-specific, may not be available for all implementations
-    probabilities: Optional[np.ndarray] = None  # (n_docs, n_topics)
     topic_sizes: Optional[Dict[int, int]] = None  # topic_id -> count
 
     # Metadata for debugging/audit

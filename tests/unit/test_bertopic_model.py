@@ -172,3 +172,105 @@ class TestBERTopicModelConfig:
 
         assert model.config["hdbscan"]["min_cluster_size"] == 6
         assert model.config["hdbscan"]["min_samples"] == 2
+
+
+class TestBERTopicModelProbabilities:
+    """Tests for required probabilities in TopicModelResult."""
+
+    def test_fit_transform_returns_probabilities(self, sample_documents, sample_config):
+        """fit_transform must return probabilities (now required)."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        model = BERTopicModel(sample_config)
+        result = model.fit_transform(sample_documents)
+
+        # probabilities is now required, not optional
+        assert result.probabilities is not None
+
+    def test_probabilities_shape_matches_docs_and_topics(self, sample_documents, sample_config):
+        """Probabilities should be (n_docs, n_topics) matrix."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        model = BERTopicModel(sample_config)
+        result = model.fit_transform(sample_documents)
+
+        # Shape should be (n_docs, n_topics)
+        assert result.probabilities.shape[0] == len(sample_documents)
+        assert result.probabilities.shape[1] == result.n_topics
+
+    def test_probabilities_are_valid_distributions(self, sample_documents, sample_config):
+        """Each row of probabilities should be a valid probability distribution."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        model = BERTopicModel(sample_config)
+        result = model.fit_transform(sample_documents)
+
+        # All values should be non-negative
+        assert np.all(result.probabilities >= 0)
+
+        # Rows should sum to ~1 (allowing for floating point tolerance)
+        row_sums = result.probabilities.sum(axis=1)
+        assert np.allclose(row_sums, 1.0, atol=0.1)
+
+
+class TestBERTopicModelRepresentations:
+    """Tests for enhanced topic representations."""
+
+    def test_representations_are_not_just_underscores(self, sample_documents, sample_config):
+        """Representations should be readable, not just keyword_underscore format."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        model = BERTopicModel(sample_config)
+        result = model.fit_transform(sample_documents)
+
+        for topic_id, representation in result.topic_representations.items():
+            # Should be a non-empty string
+            assert isinstance(representation, str)
+            assert len(representation) > 0
+            # Should have some readable content (not just underscores)
+            assert not representation.startswith("_")
+
+    def test_keywords_list_has_items(self, sample_documents, sample_config):
+        """Each topic should have meaningful keywords."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        model = BERTopicModel(sample_config)
+        result = model.fit_transform(sample_documents)
+
+        for topic_id, keywords in result.topic_keywords.items():
+            assert len(keywords) > 0
+            assert all(isinstance(kw, str) and len(kw) > 0 for kw in keywords)
+
+
+class TestBERTopicModelCountVectorizer:
+    """Tests for CountVectorizer configuration."""
+
+    def test_config_has_vectorizer_settings(self, sample_config):
+        """Config should support vectorizer settings."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Add vectorizer config
+        config_with_vectorizer = sample_config.copy()
+        config_with_vectorizer["vectorizer"] = {
+            "ngram_range": [1, 2],
+            "min_df": 2
+        }
+
+        model = BERTopicModel(config_with_vectorizer)
+
+        # Model should accept vectorizer config
+        assert "vectorizer" in model.config
+
+
+class TestBERTopicModelEmbeddings:
+    """Tests for precomputed embeddings support."""
+
+    def test_model_stores_embeddings_after_fit(self, sample_documents, sample_config):
+        """Model should precompute and store embeddings."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        model = BERTopicModel(sample_config)
+        result = model.fit_transform(sample_documents)
+
+        # Embeddings should be computed and stored in metadata
+        assert "embeddings_shape" in result.metadata or model._embeddings is not None

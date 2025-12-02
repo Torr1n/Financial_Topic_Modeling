@@ -11,7 +11,7 @@ Design:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any
 
 from cloud.src.interfaces import TopicModel
@@ -100,6 +100,10 @@ class FirmProcessor:
         """
         Convert TopicModelResult to FirmTopicOutput schema.
 
+        Sentence IDs within each topic are sorted by their probability
+        for that topic (highest first). This enables downstream use cases
+        like selecting "top K most representative sentences" for a topic.
+
         Args:
             firm_data: Original firm data
             result: TopicModelResult from model
@@ -113,9 +117,18 @@ class FirmProcessor:
         for topic_id in range(result.n_topics):
             # Find sentences assigned to this topic
             mask = result.topic_assignments == topic_id
-            topic_sentence_ids = [
-                sid for sid, is_match in zip(sentence_ids, mask) if is_match
-            ]
+            topic_indices = [i for i, is_match in enumerate(mask) if is_match]
+
+            # Sort by probability for this topic (highest first)
+            # probabilities is (n_docs, n_topics) - get column for this topic
+            if result.probabilities is not None and result.probabilities.shape[1] > topic_id:
+                # Get probabilities for this topic and sort indices by descending prob
+                topic_probs = [(idx, result.probabilities[idx, topic_id]) for idx in topic_indices]
+                topic_probs.sort(key=lambda x: x[1], reverse=True)
+                topic_sentence_ids = [sentence_ids[idx] for idx, _ in topic_probs]
+            else:
+                # Fallback: keep original order if probabilities not available
+                topic_sentence_ids = [sentence_ids[idx] for idx in topic_indices]
 
             topics.append({
                 "topic_id": topic_id,
@@ -143,7 +156,7 @@ class FirmProcessor:
             "topics": topics,
             "outlier_sentence_ids": outlier_sentence_ids,
             "metadata": {
-                "processing_timestamp": datetime.utcnow().isoformat() + "Z",
+                "processing_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "model_config": self.config,
                 "n_sentences_processed": len(sentence_ids),
             },

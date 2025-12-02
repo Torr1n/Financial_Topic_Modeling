@@ -96,8 +96,26 @@ def sample_config() -> Dict[str, Any]:
 
 @pytest.fixture
 def mock_topic_model_result():
-    """Create a mock TopicModelResult for testing processors."""
+    """Create a mock TopicModelResult for testing processors.
+
+    Note: probabilities is now required - full (n_docs x n_topics) distribution matrix.
+    """
     from cloud.src.models import TopicModelResult
+
+    # 10 docs, 3 topics - probabilities matrix
+    # Each row sums to ~1 (topic distribution per document)
+    probabilities = np.array([
+        [0.8, 0.1, 0.1],  # doc 0: topic 0 (high prob)
+        [0.7, 0.2, 0.1],  # doc 1: topic 0
+        [0.6, 0.3, 0.1],  # doc 2: topic 0 (lower prob)
+        [0.1, 0.85, 0.05],  # doc 3: topic 1 (high prob)
+        [0.2, 0.6, 0.2],  # doc 4: topic 1 (lower prob)
+        [0.1, 0.1, 0.8],  # doc 5: topic 2 (high prob)
+        [0.15, 0.15, 0.7],  # doc 6: topic 2
+        [0.2, 0.2, 0.6],  # doc 7: topic 2 (lower prob)
+        [0.33, 0.33, 0.34],  # doc 8: outlier (no clear topic)
+        [0.34, 0.33, 0.33],  # doc 9: outlier
+    ])
 
     return TopicModelResult(
         topic_assignments=np.array([0, 0, 0, 1, 1, 2, 2, 2, -1, -1]),
@@ -112,7 +130,7 @@ def mock_topic_model_result():
             1: ["revenue", "growth", "performance", "quarter", "expectations"],
             2: ["supply", "chain", "logistics", "operations", "disruption"],
         },
-        probabilities=None,
+        probabilities=probabilities,
         topic_sizes={0: 3, 1: 2, 2: 3},
         metadata={"model": "test"},
     )

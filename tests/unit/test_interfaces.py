@@ -38,11 +38,13 @@ class TestTopicModelInterface:
 
         class GoodModel(TopicModel):
             def fit_transform(self, documents: List[str]) -> TopicModelResult:
+                n_docs = len(documents)
                 return TopicModelResult(
-                    topic_assignments=np.array([0] * len(documents)),
+                    topic_assignments=np.array([0] * n_docs),
                     n_topics=1,
                     topic_representations={0: "Test Topic"},
                     topic_keywords={0: ["test"]},
+                    probabilities=np.ones((n_docs, 1)),  # Required: (n_docs, n_topics)
                 )
 
         model = GoodModel()
@@ -50,6 +52,7 @@ class TestTopicModelInterface:
 
         assert isinstance(result, TopicModelResult)
         assert result.n_topics == 1
+        assert result.probabilities.shape == (2, 1)
 
 
 class TestDataConnectorInterface:

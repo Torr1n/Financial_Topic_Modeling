@@ -36,12 +36,22 @@ class TestFirmProcessorInit:
 class TestFirmProcessorProcess:
     """Tests for FirmProcessor.process method."""
 
-    def test_process_returns_dict(self, mock_topic_model, sample_config):
+    def test_process_returns_dict(self, sample_config):
         """process() should return a dict (FirmTopicOutput schema)."""
         from cloud.src.firm_processor import FirmProcessor
-        from cloud.src.models import FirmTranscriptData, TranscriptSentence
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
 
-        processor = FirmProcessor(mock_topic_model, sample_config)
+        # Create mock with 2 docs to match input
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([[0.8, 0.2], [0.3, 0.7]]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
             TranscriptSentence("1001_T001_0000", "AI investment.", "CEO", 0),
@@ -53,12 +63,22 @@ class TestFirmProcessorProcess:
 
         assert isinstance(result, dict)
 
-    def test_process_calls_model_fit_transform(self, mock_topic_model, sample_config):
+    def test_process_calls_model_fit_transform(self, sample_config):
         """process() should call model.fit_transform with sentence texts."""
         from cloud.src.firm_processor import FirmProcessor
-        from cloud.src.models import FirmTranscriptData, TranscriptSentence
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
 
-        processor = FirmProcessor(mock_topic_model, sample_config)
+        # Create mock with 2 docs to match input
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([[0.8, 0.2], [0.3, 0.7]]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
             TranscriptSentence("1001_T001_0000", "AI investment.", "CEO", 0),
@@ -68,8 +88,8 @@ class TestFirmProcessorProcess:
 
         processor.process(firm_data)
 
-        mock_topic_model.fit_transform.assert_called_once()
-        call_args = mock_topic_model.fit_transform.call_args[0][0]
+        mock_model.fit_transform.assert_called_once()
+        call_args = mock_model.fit_transform.call_args[0][0]
         assert call_args == ["AI investment.", "Revenue grew."]
 
 
@@ -172,13 +192,22 @@ class TestFirmProcessorSentenceIdMapping:
         from cloud.src.firm_processor import FirmProcessor
         from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
 
-        # Create a mock model with known assignments
+        # Create a mock model with known assignments and probabilities
+        probabilities = np.array([
+            [0.8, 0.2],  # doc 0: topic 0
+            [0.7, 0.3],  # doc 1: topic 0
+            [0.2, 0.8],  # doc 2: topic 1
+            [0.3, 0.7],  # doc 3: topic 1
+            [0.5, 0.5],  # doc 4: outlier
+        ])
+
         mock_model = MagicMock()
         mock_model.fit_transform.return_value = TopicModelResult(
             topic_assignments=np.array([0, 0, 1, 1, -1]),  # 2 in topic 0, 2 in topic 1, 1 outlier
             n_topics=2,
             topic_representations={0: "Topic A", 1: "Topic B"},
             topic_keywords={0: ["a", "b"], 1: ["c", "d"]},
+            probabilities=probabilities,
         )
 
         processor = FirmProcessor(mock_model, sample_config)
@@ -194,14 +223,14 @@ class TestFirmProcessorSentenceIdMapping:
 
         result = processor.process(firm_data)
 
-        # Topic 0 should have sentences 0 and 1
+        # Topic 0 should have sentences 0 and 1 (ordered by probability: 0.8 > 0.7)
         topic_0 = next(t for t in result["topics"] if t["topic_id"] == 0)
-        assert set(topic_0["sentence_ids"]) == {"1001_T001_0000", "1001_T001_0001"}
+        assert topic_0["sentence_ids"] == ["1001_T001_0000", "1001_T001_0001"]
         assert topic_0["size"] == 2
 
-        # Topic 1 should have sentences 2 and 3
+        # Topic 1 should have sentences 2 and 3 (ordered by probability: 0.8 > 0.7)
         topic_1 = next(t for t in result["topics"] if t["topic_id"] == 1)
-        assert set(topic_1["sentence_ids"]) == {"1001_T001_0002", "1001_T001_0003"}
+        assert topic_1["sentence_ids"] == ["1001_T001_0002", "1001_T001_0003"]
         assert topic_1["size"] == 2
 
         # Outlier should be sentence 4
@@ -216,12 +245,21 @@ class TestFirmProcessorOutlierHandling:
         from cloud.src.firm_processor import FirmProcessor
         from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
 
+        # Probabilities for 4 docs, 1 topic
+        probabilities = np.array([
+            [0.3],  # doc 0: outlier
+            [0.4],  # doc 1: outlier
+            [0.9],  # doc 2: topic 0
+            [0.2],  # doc 3: outlier
+        ])
+
         mock_model = MagicMock()
         mock_model.fit_transform.return_value = TopicModelResult(
             topic_assignments=np.array([-1, -1, 0, -1]),  # 3 outliers, 1 in topic 0
             n_topics=1,
             topic_representations={0: "Single Topic"},
             topic_keywords={0: ["keyword"]},
+            probabilities=probabilities,
         )
 
         processor = FirmProcessor(mock_model, sample_config)
@@ -241,12 +279,17 @@ class TestFirmProcessorOutlierHandling:
         from cloud.src.firm_processor import FirmProcessor
         from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
 
+        # All outliers - still need probabilities (empty n_topics dimension)
+        # When n_topics=0, probabilities can be (n_docs, 0) shaped
+        probabilities = np.zeros((3, 0))
+
         mock_model = MagicMock()
         mock_model.fit_transform.return_value = TopicModelResult(
             topic_assignments=np.array([-1, -1, -1]),  # All outliers
             n_topics=0,
             topic_representations={},
             topic_keywords={},
+            probabilities=probabilities,
         )
 
         processor = FirmProcessor(mock_model, sample_config)
@@ -280,3 +323,92 @@ class TestFirmProcessorJsonSerializable:
         # Should not raise
         json_str = json.dumps(result, default=str)
         assert isinstance(json_str, str)
+
+
+class TestFirmProcessorSentenceOrdering:
+    """Tests for sentence ordering by probability."""
+
+    def test_sentence_ids_ordered_by_probability(self, sample_config):
+        """Sentence IDs within each topic should be ordered by probability (highest first)."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        # Create a mock model with known assignments and probabilities
+        # 5 docs, 2 topics
+        probabilities = np.array([
+            [0.8, 0.2],  # doc 0: topic 0, prob 0.8
+            [0.6, 0.4],  # doc 1: topic 0, prob 0.6 (lower than doc 0)
+            [0.9, 0.1],  # doc 2: topic 0, prob 0.9 (highest)
+            [0.3, 0.7],  # doc 3: topic 1, prob 0.7
+            [0.2, 0.8],  # doc 4: topic 1, prob 0.8 (higher than doc 3)
+        ])
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 0, 0, 1, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["a", "b"], 1: ["c", "d"]},
+            probabilities=probabilities,
+            topic_sizes={0: 3, 1: 2},
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence("1001_T001_0000", "Sentence 0.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Sentence 1.", "CEO", 1),
+            TranscriptSentence("1001_T001_0002", "Sentence 2.", "CFO", 2),
+            TranscriptSentence("1001_T001_0003", "Sentence 3.", "CFO", 3),
+            TranscriptSentence("1001_T001_0004", "Sentence 4.", "COO", 4),
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        result = processor.process(firm_data)
+
+        # Topic 0: doc 2 (0.9) > doc 0 (0.8) > doc 1 (0.6)
+        topic_0 = next(t for t in result["topics"] if t["topic_id"] == 0)
+        assert topic_0["sentence_ids"] == ["1001_T001_0002", "1001_T001_0000", "1001_T001_0001"]
+
+        # Topic 1: doc 4 (0.8) > doc 3 (0.7)
+        topic_1 = next(t for t in result["topics"] if t["topic_id"] == 1)
+        assert topic_1["sentence_ids"] == ["1001_T001_0004", "1001_T001_0003"]
+
+    def test_sentence_ordering_handles_equal_probabilities(self, sample_config):
+        """When probabilities are equal, maintain stable ordering."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        # Equal probabilities
+        probabilities = np.array([
+            [0.8, 0.2],
+            [0.8, 0.2],
+            [0.8, 0.2],
+        ])
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 0, 0]),
+            n_topics=1,
+            topic_representations={0: "Topic A"},
+            topic_keywords={0: ["a"]},
+            probabilities=probabilities,
+            topic_sizes={0: 3},
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence("1001_T001_0000", "Sentence 0.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Sentence 1.", "CEO", 1),
+            TranscriptSentence("1001_T001_0002", "Sentence 2.", "CEO", 2),
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        result = processor.process(firm_data)
+
+        # With equal probabilities, should have some consistent ordering
+        topic_0 = result["topics"][0]
+        assert len(topic_0["sentence_ids"]) == 3
+        # All three sentences should be present
+        assert set(topic_0["sentence_ids"]) == {"1001_T001_0000", "1001_T001_0001", "1001_T001_0002"}

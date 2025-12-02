@@ -25,9 +25,28 @@ hdbscan:
   metric: "euclidean"
   cluster_selection_method: "leaf"
 
+# CountVectorizer parameters for topic representation
+# ngram_range: Use unigrams and bigrams for richer topic representation
+# min_df: Minimum document frequency (conservative for small firm corpora)
+vectorizer:
+  ngram_range: [1, 2]
+  min_df: 2
+
+# Representation model parameters for topic labeling
+# mmr_diversity: Higher = more diverse keywords (0.0-1.0)
+# pos_model: SpaCy model for part-of-speech filtering
+representation:
+  mmr_diversity: 0.3
+  pos_model: "en_core_web_sm"
+
 # Theme validation parameters
 validation:
   # Tier 1: Minimum firms required for a valid theme
   min_firms: 2
   # Tier 2: Maximum topic share from single firm (0.4 = 40%)
   max_firm_dominance: 0.4
+
+# GPU Note: For GPU acceleration (future), use cuML's HDBSCAN and UMAP:
+#   from cuml.cluster import HDBSCAN
+#   from cuml.manifold import UMAP
+# Set device: "cuda" and ensure cuML is installed.

@@ -382,7 +382,7 @@ class TestReducePhaseDynamoDBWriter:
                 "n_firms": 3,
                 "n_topics": 5,
                 "topics": [],
-                "metadata": {"avg_similarity": 0.85},
+                "metadata": {"discovery_method": "dual_bertopic"},  # No floats - DynamoDB requires Decimal
             }
         ]
 
