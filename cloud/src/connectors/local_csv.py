@@ -9,21 +9,25 @@ Design:
     - Simple pandas-based CSV reading
     - Firm ID based filtering (matches FIRM_ID env var in map phase)
     - SpaCy-based sentence splitting (components -> sentences)
-    - Stopword removal for cleaner topic modeling
+    - NLP preprocessing: lowercase, lemmatize, NER filtering, stopword removal
+    - Filter Operator speaker type and single-word sentences
     - Inclusive date filtering
     - Clean sentence_id generation per operational rules
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import pandas as pd
-from spacy.lang.en import English
+import spacy
 
 from cloud.src.interfaces import DataConnector
 from cloud.src.models import TranscriptData, FirmTranscriptData, TranscriptSentence
 
 logger = logging.getLogger(__name__)
+
+# Custom stopwords for earnings call transcripts (common low-signal words)
+CUSTOM_STOPWORDS = {"yes", "thank", "thanks", "question", "questions", "afternoon", "operator", "welcome"}
 
 
 class LocalCSVConnector(DataConnector):
@@ -40,13 +44,18 @@ class LocalCSVConnector(DataConnector):
         - speakertypename: Speaker role (CEO, CFO, etc.) - optional
 
     Key behaviors:
-        - Components are concatenated per transcript, then split into sentences
-        - Stopwords are removed from sentence text for cleaner topic modeling
+        - Components are split into sentences
+        - Operator speaker_type sentences are filtered out
+        - NLP preprocessing: lowercase, lemmatize, NER removal, stopword removal
+        - Single-word sentences (after preprocessing) are filtered out
         - Sentence IDs use 0-based positions across all sentences in transcript
 
     Args:
         csv_path: Path to the CSV file
     """
+
+    # Named entity types to filter out (names, dates, numbers)
+    _FILTERED_ENTITY_TYPES = {"PERSON", "DATE", "TIME", "CARDINAL", "ORDINAL", "MONEY", "PERCENT"}
 
     def __init__(self, csv_path: str):
         """
@@ -60,12 +69,15 @@ class LocalCSVConnector(DataConnector):
         """
         self.csv_path = csv_path
 
-        # Initialize SpaCy with just the sentencizer (no model download needed)
-        self._nlp = English()
-        self._nlp.add_pipe("sentencizer")
+        # Load full SpaCy model for NER and lemmatization
+        try:
+            self._nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            logger.warning("SpaCy model 'en_core_web_sm' not found. Run: python -m spacy download en_core_web_sm")
+            raise
 
-        # Get SpaCy's built-in stopwords
-        self._stopwords = self._nlp.Defaults.stop_words
+        # Combine built-in stopwords with custom earnings call stopwords
+        self._stopwords: Set[str] = self._nlp.Defaults.stop_words | CUSTOM_STOPWORDS
 
         # Verify file exists and load
         try:
@@ -95,27 +107,53 @@ class LocalCSVConnector(DataConnector):
         doc = self._nlp(str(text))
         return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
-    def _remove_stopwords(self, text: str) -> str:
+    def _preprocess_text(self, text: str) -> str:
         """
-        Remove stopwords from text.
+        Preprocess text with NLP pipeline: lowercase, lemmatize, NER removal, stopwords.
+
+        Pipeline:
+        1. Tokenize with SpaCy (includes NER)
+        2. For each token: use lowercase lemma
+        3. Filter out: stopwords, punctuation, spaces, named entities (PERSON, DATE, etc.)
+        4. Return cleaned text
 
         Args:
             text: Input text
 
         Returns:
-            Text with stopwords removed
+            Preprocessed text (lowercase, lemmatized, filtered)
         """
         if not text:
             return ""
 
-        # Tokenize and filter stopwords
         doc = self._nlp(text)
-        filtered_tokens = [
-            token.text for token in doc
-            if token.text.lower() not in self._stopwords
-            and not token.is_punct
-            and not token.is_space
-        ]
+
+        # Build set of token indices that are part of filtered entity types
+        entity_token_indices = set()
+        for ent in doc.ents:
+            if ent.label_ in self._FILTERED_ENTITY_TYPES:
+                for i in range(ent.start, ent.end):
+                    entity_token_indices.add(i)
+
+        # Filter tokens: lowercase lemma, exclude stopwords/punct/space/entities
+        filtered_tokens = []
+        for i, token in enumerate(doc):
+            # Skip punctuation, spaces, and entity tokens
+            if token.is_punct or token.is_space or i in entity_token_indices:
+                continue
+
+            # Use lowercase lemma
+            lemma = token.lemma_.lower()
+
+            # Skip stopwords (check lemma form)
+            if lemma in self._stopwords:
+                continue
+
+            # Skip purely numeric tokens
+            if token.like_num:
+                continue
+
+            filtered_tokens.append(lemma)
 
         return " ".join(filtered_tokens)
 
@@ -128,7 +166,11 @@ class LocalCSVConnector(DataConnector):
         """
         Fetch transcript sentences for specified firms and date range.
 
-        Components are split into individual sentences and stopwords are removed.
+        Preprocessing pipeline:
+        1. Filter out Operator speaker_type rows
+        2. Split components into sentences
+        3. For each sentence: lowercase, lemmatize, remove named entities, remove stopwords
+        4. Filter out sentences with <= 1 word remaining
 
         Args:
             firm_ids: List of firm IDs (companyid values)
@@ -136,7 +178,7 @@ class LocalCSVConnector(DataConnector):
             end_date: YYYY-MM-DD format (inclusive)
 
         Returns:
-            TranscriptData with firms mapped to their sentences
+            TranscriptData with firms mapped to their preprocessed sentences
         """
         logger.info(f"Fetching transcripts for {len(firm_ids)} firm IDs, {start_date} to {end_date}")
 
@@ -162,6 +204,15 @@ class LocalCSVConnector(DataConnector):
         # Drop temporary _date column if present
         if "_date" in filtered_df.columns:
             filtered_df = filtered_df.drop(columns=["_date"])
+
+        # Filter out Operator speaker type (low-signal content)
+        if "speakertypename" in filtered_df.columns:
+            operator_mask = filtered_df["speakertypename"].str.lower() == "operator"
+            n_operator = operator_mask.sum()
+            filtered_df = filtered_df[~operator_mask]
+            if n_operator > 0:
+                logger.info(f"Filtered out {n_operator} Operator rows")
+
         logger.info(f"Filtered to {len(filtered_df)} rows")
 
         # Group by firm and build TranscriptData
@@ -201,11 +252,16 @@ class LocalCSVConnector(DataConnector):
                     component_sentences = self._split_into_sentences(str(component_text))
 
                     for sent_text in component_sentences:
-                        # Remove stopwords
-                        cleaned_text = self._remove_stopwords(sent_text)
+                        # Preprocess: lowercase, lemmatize, NER removal, stopwords
+                        cleaned_text = self._preprocess_text(sent_text)
 
-                        # Skip empty sentences after stopword removal
+                        # Skip empty sentences after preprocessing
                         if not cleaned_text.strip():
+                            continue
+
+                        # Skip single-word sentences (low signal)
+                        word_count = len(cleaned_text.split())
+                        if word_count <= 1:
                             continue
 
                         # Generate sentence_id: {firm_id}_{transcript_id}_{position:04d}
@@ -213,7 +269,8 @@ class LocalCSVConnector(DataConnector):
 
                         sentence = TranscriptSentence(
                             sentence_id=sentence_id,
-                            text=cleaned_text,
+                            raw_text=sent_text,  # Original for observability
+                            cleaned_text=cleaned_text,  # Preprocessed for topic modeling
                             speaker_type=speaker_type,
                             position=sentence_position,
                         )

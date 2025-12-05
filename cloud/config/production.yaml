@@ -1,0 +1,101 @@
+# =============================================================================
+# PRODUCTION CONFIGURATION - Cloud Deployment (g4dn.2xlarge GPU instance)
+# =============================================================================
+#
+# This is the SINGLE SOURCE OF TRUTH for pipeline configuration.
+# All components read from this file:
+#   - UnifiedPipeline
+#   - BERTopicModel (firm and theme)
+#   - XAIClient
+#   - Database models
+#
+# =============================================================================
+
+# =============================================================================
+# EMBEDDING MODEL CONFIGURATION
+# =============================================================================
+embedding:
+  # Model name from sentence-transformers or HuggingFace
+  # Options:
+  #   - "all-mpnet-base-v2" (768 dim, fast, good quality)
+  #   - "Alibaba-NLP/gte-Qwen2-1.5B-instruct" (1536 dim, better quality)
+  #   - "Qwen/Qwen3-Embedding-8B" (4096 dim, SOTA quality, requires GPU)
+  model: "all-mpnet-base-v2"
+  dimension: 768
+
+  # Device: "cuda" for GPU, "cpu" for CPU
+  # IMPORTANT: Use "cuda" for cloud deployment (10x faster)
+  device: "cpu"
+
+# =============================================================================
+# FIRM-LEVEL TOPIC MODEL (BERTopic)
+# =============================================================================
+# Configuration for per-firm topic clustering
+# Optimized for: ~300 sentences per firm, ~25 topics expected
+firm_topic_model:
+  umap:
+    n_neighbors: 15 # Local neighborhood size
+    n_components: 10 # Target dimensions
+    min_dist: 0.01 # Minimum distance between points
+    metric: "cosine" # Distance metric
+    random_state: 42 # Reproducibility
+
+  hdbscan:
+    min_cluster_size: 6 # Minimum cluster size
+    min_samples: 2 # Core point threshold
+    metric: "euclidean" # Distance metric (on UMAP output)
+    cluster_selection_method: "leaf" # Prefer smaller clusters
+
+  vectorizer:
+    ngram_range: [1, 2] # Unigrams and bigrams
+    min_df: 2 # Minimum document frequency
+
+  representation:
+    mmr_diversity: 0.3 # Diversity in keyword selection
+    pos_model: "en_core_web_sm" # SpaCy model for POS tagging
+
+# =============================================================================
+# THEME-LEVEL TOPIC MODEL (BERTopic)
+# =============================================================================
+# Configuration for cross-firm theme clustering
+# Optimized for: ~25*N_firms topics (750-3000), ~100-500 themes expected
+# Key differences from firm-level:
+#   - Larger min_cluster_size (themes should span multiple firms)
+#   - More global UMAP structure (larger n_neighbors)
+theme_topic_model:
+  umap:
+    n_neighbors: 30 # Larger for global structure
+    n_components: 15 # More dimensions for complex topic space
+    min_dist: 0.025 # Slight separation for visualization
+    metric: "cosine"
+    random_state: 42
+
+  hdbscan:
+    min_cluster_size: 20 # Themes should be substantial
+    min_samples: 6 # More robust core points
+    metric: "euclidean"
+    cluster_selection_method: "eom" # Excess of mass for larger clusters
+
+  vectorizer:
+    ngram_range: [1, 2]
+    min_df: 3 # Higher threshold for theme-level
+
+  representation:
+    mmr_diversity: 0.4 # More diversity at theme level
+    pos_model: "en_core_web_sm"
+
+# =============================================================================
+# THEME VALIDATION
+# =============================================================================
+validation:
+  min_firms: 2 # Theme must span at least 2 firms
+  max_firm_dominance: 0.4 # No single firm can dominate a theme
+
+# =============================================================================
+# LLM CONFIGURATION (xAI/Grok)
+# =============================================================================
+llm:
+  model: "grok-4-1-fast-reasoning" # xAI model
+  max_concurrent: 50 # Concurrent API requests
+  timeout: 30 # Request timeout (seconds)
+  max_retries: 3 # Retry attempts on failure

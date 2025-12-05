@@ -1,18 +1,21 @@
 """
 FirmProcessor - Map phase logic for single firm topic modeling.
 
-This module converts firm transcript data into the FirmTopicOutput schema,
-which is serialized to JSON for S3 storage in the map phase.
+This module converts firm transcript data into the FirmTopicOutput schema.
 
 Design:
     - Uses dependency injection for TopicModel (testable, swappable)
     - Produces FirmTopicOutput schema per approved plan
     - Tracks outlier sentences separately (topic_id = -1)
+    - Accepts optional pre-computed embeddings (Phase 2 - Pipeline Unification)
+    - Returns topic_assignments for Postgres sentence→topic mapping
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
+
+import numpy as np
 
 from cloud.src.interfaces import TopicModel
 from cloud.src.models import FirmTranscriptData, TopicModelResult
@@ -46,15 +49,27 @@ class FirmProcessor:
         self.model = topic_model
         self.config = config
 
-    def process(self, firm_data: FirmTranscriptData) -> Dict[str, Any]:
+    def process(
+        self,
+        firm_data: FirmTranscriptData,
+        embeddings: Optional[np.ndarray] = None,
+    ) -> Tuple[Dict[str, Any], np.ndarray]:
         """
-        Run topic modeling and return FirmTopicOutput.
+        Run topic modeling and return FirmTopicOutput with topic assignments.
 
         Args:
             firm_data: FirmTranscriptData from DataConnector
+            embeddings: Optional pre-computed embeddings. If provided, passed to
+                       model.fit_transform() to skip internal encoding. Shape:
+                       (len(firm_data.sentences), embedding_dim). Use this when
+                       the unified pipeline computes embeddings externally.
 
         Returns:
-            Dict matching FirmTopicOutput schema (JSON-serializable):
+            Tuple of:
+                - Dict matching FirmTopicOutput schema (JSON-serializable)
+                - np.ndarray of topic_assignments (for Postgres sentence→topic mapping)
+
+            FirmTopicOutput schema:
             {
                 "firm_id": str,
                 "firm_name": str,
@@ -79,17 +94,20 @@ class FirmProcessor:
         """
         logger.info(f"Processing firm {firm_data.firm_id} ({firm_data.firm_name})")
 
-        # Extract texts and IDs
-        sentences = [s.text for s in firm_data.sentences]
+        # Extract cleaned texts and IDs (use cleaned_text for topic modeling)
+        sentences = [s.cleaned_text for s in firm_data.sentences]
         sentence_ids = [s.sentence_id for s in firm_data.sentences]
 
         logger.info(f"Running topic model on {len(sentences)} sentences")
 
-        # Run topic model
-        result = self.model.fit_transform(sentences)
+        # Run topic model with optional pre-computed embeddings
+        result = self.model.fit_transform(sentences, embeddings=embeddings)
 
         # Convert to output schema
-        return self._to_output(firm_data, result, sentence_ids)
+        output = self._to_output(firm_data, result, sentence_ids)
+
+        # Return both output dict and topic_assignments for Postgres mapping
+        return output, result.topic_assignments
 
     def _to_output(
         self,

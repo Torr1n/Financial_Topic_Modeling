@@ -9,3 +9,14 @@ venv/
 
 # Pytest cache
 .pytest_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets
+.env
+
+# Big files
+.terraform/
+*.zip
+transcripts_2023-01-01_to_2023-03-31_enriched.csv

@@ -20,7 +20,7 @@ Environment Variables:
     Optional:
         CONFIG_PATH       - Path to config YAML
         LOG_LEVEL         - Logging level (default: INFO)
-        MIN_FIRMS         - Minimum firms required to proceed (default: 1)
+        MIN_FIRMS         - Minimum firms required to proceed (default: 2)
 """
 
 import os
@@ -162,9 +162,11 @@ def main():
     """
     try:
         local_mode = os.environ.get("LOCAL_MODE", "false").lower() == "true"
-        min_firms = int(os.environ.get("MIN_FIRMS", "1"))
+        min_firms = int(os.environ.get("MIN_FIRMS", "2"))
 
-        logger.info(f"Reduce phase starting, local_mode={local_mode}, min_firms={min_firms}")
+        logger.info(
+            f"Reduce phase starting, local_mode={local_mode}, min_firms={min_firms}"
+        )
 
         # 1. Load firm results
         logger.info("Loading firm topic results...")
@@ -182,7 +184,9 @@ def main():
 
         logger.info(f"Loaded {len(firm_results)} firms, skipped {len(skipped)} files")
         if skipped:
-            logger.warning(f"Skipped files: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")
+            logger.warning(
+                f"Skipped files: {skipped[:10]}{'...' if len(skipped) > 10 else ''}"
+            )
 
         # 2. Check minimum firms requirement
         if len(firm_results) < min_firms:
@@ -194,7 +198,9 @@ def main():
         logger.info(f"{len(valid_results)} firms have valid topics (n_topics > 0)")
 
         if len(valid_results) < min_firms:
-            logger.error(f"Insufficient valid firms after filtering: {len(valid_results)} < {min_firms}")
+            logger.error(
+                f"Insufficient valid firms after filtering: {len(valid_results)} < {min_firms}"
+            )
             sys.exit(1)
 
         # 4. Initialize topic model and aggregator
@@ -212,7 +218,9 @@ def main():
 
         # 6. Generate theme IDs (already done in ThemeAggregator, but log them)
         for theme in themes:
-            logger.debug(f"Theme {theme['theme_id']}: {theme['name']} ({theme['n_topics']} topics, {theme['n_firms']} firms)")
+            logger.debug(
+                f"Theme {theme['theme_id']}: {theme['name']} ({theme['n_topics']} topics, {theme['n_firms']} firms)"
+            )
 
         # 7. Save output
         if local_mode:

@@ -111,7 +111,7 @@ class TestLocalCSVConnectorFetchTranscripts:
         sentence = result.firms["1001"].sentences[0]
         assert isinstance(sentence, TranscriptSentence)
         assert sentence.sentence_id is not None
-        assert sentence.text is not None
+        assert sentence.cleaned_text is not None
         assert sentence.position is not None
 
     def test_fetch_multiple_firms(self, temp_csv_file):
@@ -192,8 +192,8 @@ class TestLocalCSVConnectorSentenceSplitting:
         for sentence in sentences:
             # Each sentence should NOT contain multiple periods (indicating multiple sentences)
             # Allow for abbreviations but not multiple sentences
-            period_count = sentence.text.count('.')
-            assert period_count <= 1, f"Sentence contains multiple sentences: {sentence.text}"
+            period_count = sentence.cleaned_text.count('.')
+            assert period_count <= 1, f"Sentence contains multiple sentences: {sentence.cleaned_text}"
 
     def test_preserves_sentence_order_within_transcript(self, temp_csv_file):
         """Sentences should be in correct order across all components."""
@@ -232,9 +232,9 @@ class TestLocalCSVConnectorStopwordRemoval:
         common_stopwords = {"the", "a", "an", "is", "are", "was", "were", "be", "been"}
 
         for sentence in sentences:
-            words = sentence.text.lower().split()
+            words = sentence.cleaned_text.lower().split()
             stopwords_found = common_stopwords.intersection(set(words))
-            assert len(stopwords_found) == 0, f"Stopwords found in: {sentence.text}"
+            assert len(stopwords_found) == 0, f"Stopwords found in: {sentence.cleaned_text}"
 
     def test_preserves_meaningful_words(self, temp_csv_file):
         """Should keep meaningful content words after stopword removal."""
@@ -250,7 +250,7 @@ class TestLocalCSVConnectorStopwordRemoval:
         sentences = result.firms["1001"].sentences
 
         # Check that meaningful words are preserved
-        all_text = " ".join(s.text.lower() for s in sentences)
+        all_text = " ".join(s.cleaned_text.lower() for s in sentences)
         meaningful_words = ["investing", "ai", "machine", "learning", "revenue", "growth"]
 
         found_words = [w for w in meaningful_words if w in all_text]
@@ -268,7 +268,7 @@ class TestLocalCSVConnectorStopwordRemoval:
         )
 
         for sentence in result.firms["1001"].sentences:
-            assert len(sentence.text.strip()) > 0, "Empty sentence found"
+            assert len(sentence.cleaned_text.strip()) > 0, "Empty sentence found"
 
 
 class TestLocalCSVConnectorSentenceIdGeneration:

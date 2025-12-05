@@ -1,0 +1,33 @@
+# docker-compose.yml
+# Local development environment with PostgreSQL + pgvector
+#
+# Usage:
+#   docker-compose up -d         # Start Postgres
+#   docker-compose down -v       # Stop and remove volumes
+#   docker-compose logs postgres # View logs
+#
+# Connection: postgresql://ftm:ftm_password@localhost:5432/ftm
+
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ftm-postgres
+    environment:
+      POSTGRES_USER: ftm
+      POSTGRES_PASSWORD: ftm_password
+      POSTGRES_DB: ftm
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ftm -d ftm"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

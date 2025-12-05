@@ -16,28 +16,44 @@ Best Practices Applied:
     - Explicit CountVectorizer for n-gram support
     - Full topic distribution via approximate_distribution
 
-GPU Note:
-    For GPU acceleration, use cuML's HDBSCAN and UMAP:
-        from cuml.cluster import HDBSCAN
-        from cuml.manifold import UMAP
-    This is a future enhancement - not implemented yet.
+GPU Acceleration:
+    When device="cuda", uses cuML's GPU-accelerated HDBSCAN and UMAP.
+    This provides 10-100x speedup for dimensionality reduction and clustering.
+    Requires: pip install cuml-cu11 (or cuml-cu12 depending on CUDA version)
 """
 
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 import numpy as np
 from bertopic import BERTopic
-from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance, PartOfSpeech
+from bertopic.representation import (
+    KeyBERTInspired,
+    MaximalMarginalRelevance,
+    PartOfSpeech,
+)
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import CountVectorizer
-from umap import UMAP
-from hdbscan import HDBSCAN
 
 from cloud.src.interfaces import TopicModel
 from cloud.src.models import TopicModelResult
 
 logger = logging.getLogger(__name__)
+
+# GPU acceleration: Import cuML if available
+_CUML_AVAILABLE = False
+try:
+    from cuml.cluster import HDBSCAN as cuHDBSCAN
+    from cuml.manifold import UMAP as cuUMAP
+    from cuml.preprocessing import normalize as cu_normalize
+    _CUML_AVAILABLE = True
+    logger.info("cuML available - GPU acceleration enabled for UMAP/HDBSCAN")
+except ImportError:
+    logger.debug("cuML not available - using CPU implementations")
+
+# CPU fallback imports
+from umap import UMAP
+from hdbscan import HDBSCAN
 
 
 class BERTopicModel(TopicModel):
@@ -58,7 +74,9 @@ class BERTopicModel(TopicModel):
     # Default configuration values (from MVP config that worked)
     DEFAULT_CONFIG = {
         "embedding_model": "all-mpnet-base-v2",
-        "device": "cpu",  # "cpu", "cuda", or "auto" - default to cpu for compatibility
+        # ⚠️ CLOUD DEPLOYMENT: Change to "cuda" for GPU acceleration (10x faster)
+        # CPU default is for local testing compatibility only
+        "device": "cpu",
         "umap": {
             "n_neighbors": 15,
             "n_components": 10,
@@ -82,26 +100,36 @@ class BERTopicModel(TopicModel):
         },
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        embedding_model: Optional[SentenceTransformer] = None,
+    ):
         """
         Initialize BERTopicModel with configuration.
 
         Args:
             config: Configuration dict. Missing keys use defaults.
+            embedding_model: Optional pre-loaded SentenceTransformer. If provided,
+                            this model is reused instead of loading a new one.
+                            Use this when the unified pipeline loads the model once.
         """
         self.config = self._merge_config(config)
         self.embedding_model_name = self.config.get(
             "embedding_model", self.DEFAULT_CONFIG["embedding_model"]
         )
 
-        # Initialize components lazily (on first fit_transform call)
-        self._embedding_model = None
+        # Use injected embedding model or initialize lazily
+        self._embedding_model = embedding_model
         self._bertopic_model = None
         self._embeddings = None  # Store pre-computed embeddings
 
-        logger.info(
-            f"Initialized BERTopicModel with embedding: {self.embedding_model_name}"
-        )
+        if embedding_model:
+            logger.info(f"Initialized BERTopicModel with injected embedding model")
+        else:
+            logger.info(
+                f"Initialized BERTopicModel with embedding: {self.embedding_model_name}"
+            )
 
     def _merge_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Merge provided config with defaults."""
@@ -126,33 +154,32 @@ class BERTopicModel(TopicModel):
             logger.info(
                 f"Loading embedding model: {self.embedding_model_name} on {device}"
             )
+
+            if device == "cpu":
+                logger.warning(
+                    "⚠️  BERTopicModel using CPU - set config['device']='cuda' for production"
+                )
+
             self._embedding_model = SentenceTransformer(
                 self.embedding_model_name, device=device
             )
 
         if self._bertopic_model is None:
-            # Configure UMAP
-            umap_config = self.config["umap"]
-            umap_model = UMAP(
-                n_neighbors=umap_config["n_neighbors"],
-                n_components=umap_config["n_components"],
-                min_dist=umap_config["min_dist"],
-                metric=umap_config["metric"],
-                random_state=umap_config.get("random_state", 42),
-            )
+            device = self.config.get("device", "cpu")
+            use_gpu = device == "cuda" and _CUML_AVAILABLE
 
-            # Configure HDBSCAN
-            hdbscan_config = self.config["hdbscan"]
-            hdbscan_model = HDBSCAN(
-                min_cluster_size=hdbscan_config["min_cluster_size"],
-                min_samples=hdbscan_config["min_samples"],
-                metric=hdbscan_config["metric"],
-                cluster_selection_method=hdbscan_config.get(
-                    "cluster_selection_method", "leaf"
-                ),
-            )
+            if use_gpu:
+                logger.info("Using cuML GPU-accelerated UMAP and HDBSCAN")
+                umap_model, hdbscan_model = self._create_gpu_models()
+            else:
+                if device == "cuda" and not _CUML_AVAILABLE:
+                    logger.warning(
+                        "GPU requested but cuML not available - falling back to CPU. "
+                        "Install cuML: pip install cuml-cu11 (or cuml-cu12)"
+                    )
+                umap_model, hdbscan_model = self._create_cpu_models()
 
-            # Configure CountVectorizer
+            # Configure CountVectorizer (same for CPU/GPU)
             vectorizer_config = self.config.get("vectorizer", {})
             ngram_range = tuple(vectorizer_config.get("ngram_range", [1, 2]))
             min_df = vectorizer_config.get("min_df", 2)
@@ -165,8 +192,6 @@ class BERTopicModel(TopicModel):
             representation_models = self._create_representation_models()
 
             # Create BERTopic with our configured components
-            # Note: We still pass embedding_model because representation models
-            # (like KeyBERTInspired) need it to embed representative documents
             self._bertopic_model = BERTopic(
                 embedding_model=self._embedding_model,
                 umap_model=umap_model,
@@ -176,7 +201,57 @@ class BERTopicModel(TopicModel):
                 verbose=False,
             )
 
-            logger.info("Initialized BERTopic model with enhanced representations")
+            logger.info(f"Initialized BERTopic model ({'GPU' if use_gpu else 'CPU'} acceleration)")
+
+    def _create_cpu_models(self):
+        """Create CPU-based UMAP and HDBSCAN models."""
+        umap_config = self.config["umap"]
+        umap_model = UMAP(
+            n_neighbors=umap_config["n_neighbors"],
+            n_components=umap_config["n_components"],
+            min_dist=umap_config["min_dist"],
+            metric=umap_config["metric"],
+            random_state=umap_config.get("random_state", 42),
+        )
+
+        hdbscan_config = self.config["hdbscan"]
+        hdbscan_model = HDBSCAN(
+            min_cluster_size=hdbscan_config["min_cluster_size"],
+            min_samples=hdbscan_config["min_samples"],
+            metric=hdbscan_config["metric"],
+            cluster_selection_method=hdbscan_config.get("cluster_selection_method", "leaf"),
+        )
+
+        return umap_model, hdbscan_model
+
+    def _create_gpu_models(self):
+        """Create cuML GPU-accelerated UMAP and HDBSCAN models."""
+        umap_config = self.config["umap"]
+
+        # cuML UMAP has slightly different parameter names
+        # Note: cuML UMAP uses 'metric' but only supports 'euclidean' and 'cosine'
+        umap_model = cuUMAP(
+            n_neighbors=umap_config["n_neighbors"],
+            n_components=umap_config["n_components"],
+            min_dist=umap_config["min_dist"],
+            metric=umap_config.get("metric", "cosine"),
+            random_state=umap_config.get("random_state", 42),
+        )
+
+        hdbscan_config = self.config["hdbscan"]
+
+        # cuML HDBSCAN parameters
+        # Note: cuML HDBSCAN requires gen_min_span_tree=True for prediction_data
+        hdbscan_model = cuHDBSCAN(
+            min_cluster_size=hdbscan_config["min_cluster_size"],
+            min_samples=hdbscan_config["min_samples"],
+            metric=hdbscan_config.get("metric", "euclidean"),
+            cluster_selection_method=hdbscan_config.get("cluster_selection_method", "leaf"),
+            gen_min_span_tree=True,
+            prediction_data=True,
+        )
+
+        return umap_model, hdbscan_model
 
     def _create_representation_models(self) -> Dict[str, Any]:
         """
@@ -202,7 +277,9 @@ class BERTopicModel(TopicModel):
             pos_model = rep_config.get("pos_model", "en_core_web_sm")
             models["POS"] = PartOfSpeech(pos_model)
         except Exception as e:
-            logger.warning(f"Failed to load POS model: {e}. Skipping POS representation.")
+            logger.warning(
+                f"Failed to load POS model: {e}. Skipping POS representation."
+            )
 
         return models
 
@@ -253,12 +330,21 @@ class BERTopicModel(TopicModel):
         # Fallback to default representation
         return row["Name"].values[0] if "Name" in row.columns else f"Topic {topic_id}"
 
-    def fit_transform(self, documents: List[str]) -> TopicModelResult:
+    def fit_transform(
+        self,
+        documents: List[str],
+        embeddings: Optional[np.ndarray] = None,
+    ) -> TopicModelResult:
         """
         Fit the topic model and transform documents to topics.
 
         Args:
             documents: List of document texts (sentences)
+            embeddings: Optional pre-computed embeddings. If provided, skips
+                       internal SentenceTransformer encoding. Shape must be
+                       (len(documents), embedding_dim). Use this when the
+                       unified pipeline computes embeddings externally for
+                       efficiency (model loaded once, reused for all firms).
 
         Returns:
             TopicModelResult with topic assignments, representations, keywords,
@@ -275,17 +361,26 @@ class BERTopicModel(TopicModel):
 
         logger.info(f"Fitting BERTopic on {len(documents)} documents")
 
-        # Pre-compute embeddings (best practice for speed)
-        logger.info("Pre-computing document embeddings...")
-        self._embeddings = self._embedding_model.encode(
-            documents,
-            show_progress_bar=False,
-        )
+        # Use provided embeddings or compute them internally
+        if embeddings is not None:
+            logger.info("Using pre-computed embeddings")
+            self._embeddings = embeddings
+        else:
+            logger.info("Pre-computing document embeddings...")
+            self._embeddings = self._embedding_model.encode(
+                documents,
+                show_progress_bar=False,
+            )
 
         # Fit and transform with pre-computed embeddings
         topics, probs = self._bertopic_model.fit_transform(
             documents,
             embeddings=self._embeddings,
+        )
+
+        # Reduce outliers with pre-computed embeddings
+        topics = self._bertopic_model.reduce_outliers(
+            documents, topics, strategy="embeddings", embeddings=self._embeddings
         )
 
         # Extract topic info
@@ -329,6 +424,17 @@ class BERTopicModel(TopicModel):
         # Avoid division by zero
         row_sums = np.where(row_sums == 0, 1, row_sums)
         probabilities = topic_distr / row_sums
+
+        # Guard: approximate_distribution can return all-zero rows when
+        # clustering produces no assignment; ensure valid distributions
+        if n_topics > 0:
+            zero_rows = np.where(probabilities.sum(axis=1) == 0)[0]
+            if len(zero_rows) > 0:
+                logger.debug(
+                    "Replacing %d zero-probability rows with uniform distribution",
+                    len(zero_rows),
+                )
+                probabilities[zero_rows] = 1.0 / n_topics
 
         logger.info(f"Topic distribution shape: {probabilities.shape}")
 

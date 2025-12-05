@@ -22,13 +22,16 @@ class TranscriptSentence:
 
     Attributes:
         sentence_id: Unique identifier (format: {firm_id}_{transcript_id}_{position:04d})
-        text: The actual sentence text
+        raw_text: Original unprocessed sentence text (for observability)
+        cleaned_text: Preprocessed text (lowercase, lemmatized, stopwords removed)
+                     Used for embeddings and topic modeling
         speaker_type: Speaker role (CEO, CFO, Analyst, etc.) - optional
         position: Order within the transcript (0-indexed)
     """
 
     sentence_id: str
-    text: str
+    raw_text: str
+    cleaned_text: str
     speaker_type: Optional[str]
     position: int
 
@@ -64,15 +67,15 @@ class TranscriptData:
 
     def get_firm_sentences(self, firm_id: str) -> List[str]:
         """
-        Get sentence texts for a firm.
+        Get cleaned sentence texts for a firm (for topic modeling).
 
         Args:
             firm_id: The firm ID to retrieve sentences for
 
         Returns:
-            List of sentence text strings
+            List of cleaned sentence text strings
         """
-        return [s.text for s in self.firms[firm_id].sentences]
+        return [s.cleaned_text for s in self.firms[firm_id].sentences]
 
     def get_all_firm_ids(self) -> List[str]:
         """

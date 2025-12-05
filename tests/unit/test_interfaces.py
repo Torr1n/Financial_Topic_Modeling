@@ -117,7 +117,7 @@ class TestDataConnectorInterface:
                 self, firm_ids: List[str], start_date: str, end_date: str
             ) -> TranscriptData:
                 # Create mock data
-                sentences = [TranscriptSentence("1001_T001_0001", "Test sentence.", "CEO", 0)]
+                sentences = [TranscriptSentence("1001_T001_0001", "Test sentence.", "Test sentence.", "CEO", 0)]
                 firm = FirmTranscriptData("1001", "Test Corp", sentences)
                 return TranscriptData(firms={"1001": firm})
 

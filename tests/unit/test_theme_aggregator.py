@@ -623,6 +623,201 @@ class TestThemeOutputJsonSerializable:
         assert isinstance(json_str, str)
 
 
+class TestPhase3SummaryBasedClustering:
+    """Tests for Phase 3: Summary-based theme clustering."""
+
+    def test_aggregate_uses_summaries_when_available(self, sample_config):
+        """aggregate() should use summaries (not keywords) for clustering when present."""
+        from cloud.src.theme_aggregator import ThemeAggregator
+        from cloud.src.models import TopicModelResult
+
+        # Topics with both representation (keywords) and summary (LLM-generated)
+        firm_outputs = [
+            {
+                "firm_id": "1001",
+                "firm_name": "Firm A",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "ai ml cloud",  # Keywords
+                    "summary": "Discussion of AI and machine learning investments in cloud infrastructure.",  # LLM summary
+                    "keywords": ["ai", "ml"],
+                    "size": 10,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+            {
+                "firm_id": "1002",
+                "firm_name": "Firm B",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "revenue earnings growth",  # Keywords
+                    "summary": "Quarterly revenue performance exceeded analyst expectations.",  # LLM summary
+                    "keywords": ["revenue"],
+                    "size": 15,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+        ]
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 0]),
+            n_topics=1,
+            topic_representations={0: "Combined Theme"},
+            topic_keywords={0: ["combined"]},
+            probabilities=np.array([[1.0], [1.0]]),
+        )
+
+        aggregator = ThemeAggregator(mock_model, sample_config)
+        aggregator.aggregate(firm_outputs)
+
+        # Check what was passed to fit_transform
+        call_args = mock_model.fit_transform.call_args[0][0]
+
+        # Should contain LLM summaries, NOT keywords
+        assert "Discussion of AI and machine learning investments" in call_args[0]
+        assert "Quarterly revenue performance exceeded" in call_args[1]
+        # Should NOT contain raw keywords
+        assert "ai ml cloud" not in call_args
+        assert "revenue earnings growth" not in call_args
+
+    def test_aggregate_falls_back_to_representation_when_no_summary(self, sample_config):
+        """aggregate() should fall back to representation when summary is missing."""
+        from cloud.src.theme_aggregator import ThemeAggregator
+        from cloud.src.models import TopicModelResult
+
+        # Mix of topics with and without summaries
+        firm_outputs = [
+            {
+                "firm_id": "1001",
+                "firm_name": "Firm A",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "ai ml cloud",
+                    "summary": "AI and ML discussion.",  # Has summary
+                    "keywords": ["ai"],
+                    "size": 10,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+            {
+                "firm_id": "1002",
+                "firm_name": "Firm B",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "revenue growth performance",  # Keywords only
+                    # No summary field - should fall back to representation
+                    "keywords": ["revenue"],
+                    "size": 15,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+        ]
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 0]),
+            n_topics=1,
+            topic_representations={0: "Combined Theme"},
+            topic_keywords={0: ["combined"]},
+            probabilities=np.array([[1.0], [1.0]]),
+        )
+
+        aggregator = ThemeAggregator(mock_model, sample_config)
+        aggregator.aggregate(firm_outputs)
+
+        call_args = mock_model.fit_transform.call_args[0][0]
+
+        # First topic uses summary
+        assert "AI and ML discussion." in call_args[0]
+        # Second topic falls back to representation (no summary)
+        assert "revenue growth performance" in call_args[1]
+
+    def test_topic_metadata_includes_summary(self, sample_config):
+        """Topic metadata should include summary field for downstream use."""
+        from cloud.src.theme_aggregator import ThemeAggregator
+        from cloud.src.models import TopicModelResult
+
+        # Need 3 firms so each has 33% dominance (< 40% threshold)
+        firm_outputs = [
+            {
+                "firm_id": "1001",
+                "firm_name": "Firm A",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "ai ml",
+                    "summary": "AI discussion summary.",
+                    "keywords": ["ai"],
+                    "size": 10,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+            {
+                "firm_id": "1002",
+                "firm_name": "Firm B",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "revenue",
+                    "summary": "Revenue summary.",
+                    "keywords": ["revenue"],
+                    "size": 15,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+            {
+                "firm_id": "1003",
+                "firm_name": "Firm C",
+                "n_topics": 1,
+                "topics": [{
+                    "topic_id": 0,
+                    "representation": "growth",
+                    "summary": "Growth summary.",
+                    "keywords": ["growth"],
+                    "size": 12,
+                    "sentence_ids": [],
+                }],
+                "outlier_sentence_ids": [],
+                "metadata": {},
+            },
+        ]
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 0, 0]),  # 3 topics
+            n_topics=1,
+            topic_representations={0: "Theme"},
+            topic_keywords={0: ["theme"]},
+            probabilities=np.array([[1.0], [1.0], [1.0]]),
+        )
+
+        aggregator = ThemeAggregator(mock_model, sample_config)
+        result = aggregator.aggregate(firm_outputs)
+
+        # Each topic in the theme should have summary field
+        assert len(result) == 1, f"Expected 1 theme, got {len(result)}"
+        for topic in result[0]["topics"]:
+            assert "summary" in topic
+            assert topic["summary"] is not None
+
+
 class TestThemeIdGeneration:
     """Tests for theme ID generation."""
 

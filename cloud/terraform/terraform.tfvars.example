@@ -1,0 +1,20 @@
+# Financial Topic Modeling - Terraform Variables
+# Copy this file to terraform.tfvars and fill in your values
+# NEVER commit terraform.tfvars to version control
+#
+# NOTE: Scripts read ALL config from Terraform outputs (single source of truth)
+# You only need to create a .env file for XAI_API_KEY (optional, for LLM summaries)
+
+# AWS Region
+aws_region = "us-east-1"
+
+# RDS credentials (scripts will read this from terraform output)
+db_username = "ftm"
+db_password = "your-secure-password-here"  # Change this!
+
+# Your IP for SSH access (find at https://whatismyip.com)
+# Must be in CIDR notation (add /32 for single IP)
+my_ip = "1.2.3.4/32"  # Change to your IP
+
+# Your existing EC2 key pair name
+key_pair_name = "your-key-pair-name"  # Change this!

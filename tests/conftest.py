@@ -6,10 +6,50 @@ This module provides reusable fixtures for testing the topic modeling pipeline.
 
 import pytest
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from unittest.mock import MagicMock
 import tempfile
 import os
+
+# Configure pytest-asyncio to auto-detect async tests
+pytest_plugins = ('pytest_asyncio',)
+
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+
+def make_sentence(
+    sentence_id: str,
+    text: str,
+    speaker_type: Optional[str] = "CEO",
+    position: int = 0,
+    cleaned_text: Optional[str] = None,
+):
+    """
+    Helper to create TranscriptSentence for tests.
+
+    For tests, cleaned_text defaults to the same as raw_text (text param).
+    This simplifies test creation while supporting the new dual-text model.
+
+    Args:
+        sentence_id: Unique sentence identifier
+        text: The sentence text (used as raw_text, and cleaned_text if not specified)
+        speaker_type: Speaker role (default: "CEO")
+        position: Position in transcript (default: 0)
+        cleaned_text: Optional explicit cleaned text (defaults to text)
+
+    Returns:
+        TranscriptSentence instance
+    """
+    from cloud.src.models import TranscriptSentence
+    return TranscriptSentence(
+        sentence_id=sentence_id,
+        raw_text=text,
+        cleaned_text=cleaned_text if cleaned_text is not None else text,
+        speaker_type=speaker_type,
+        position=position,
+    )
 
 
 # =============================================================================
@@ -70,6 +110,7 @@ def sample_config() -> Dict[str, Any]:
     """Sample configuration for topic models."""
     return {
         "embedding_model": "all-mpnet-base-v2",
+        "device": "cpu",  # Use CPU for testing (avoid CUDA errors on machines without GPU)
         "umap": {
             "n_neighbors": 15,
             "n_components": 10,
@@ -93,6 +134,67 @@ def sample_config() -> Dict[str, Any]:
 # =============================================================================
 # Mock Fixtures
 # =============================================================================
+
+
+class MockSentenceTransformer:
+    """
+    Mock SentenceTransformer for tests.
+
+    Returns deterministic embeddings without downloading models.
+    All tests should use this to avoid network dependencies.
+    """
+
+    def __init__(self, model_name: str = "mock-model", device: str = "cpu"):
+        self.model_name = model_name
+        self.device = device
+        self._embedding_dim = 768  # all-mpnet-base-v2 dimension
+
+    def encode(
+        self,
+        sentences,
+        show_progress_bar: bool = False,
+        **kwargs,
+    ) -> np.ndarray:
+        """Return deterministic embeddings based on text hash."""
+        if isinstance(sentences, str):
+            sentences = [sentences]
+
+        embeddings = []
+        for i, text in enumerate(sentences):
+            # Create deterministic but unique embedding per text
+            np.random.seed(hash(text) % (2**32))
+            embedding = np.random.randn(self._embedding_dim).astype(np.float32)
+            # Normalize to unit length (like real embeddings)
+            embedding = embedding / np.linalg.norm(embedding)
+            embeddings.append(embedding)
+
+        return np.array(embeddings)
+
+
+@pytest.fixture
+def mock_sentence_transformer():
+    """Return a MockSentenceTransformer instance."""
+    return MockSentenceTransformer()
+
+
+@pytest.fixture(autouse=True)
+def patch_sentence_transformer(monkeypatch):
+    """
+    Patch SentenceTransformer globally to avoid network downloads.
+
+    Applied autouse so ALL tests use the mock by default, preventing
+    external model downloads in network-restricted environments.
+    """
+    mock_cls = MockSentenceTransformer
+
+    # Replace the class entirely so instances are our mock
+    monkeypatch.setattr(
+        "sentence_transformers.SentenceTransformer",
+        mock_cls,
+    )
+
+    return mock_cls
+
 
 @pytest.fixture
 def mock_topic_model_result():

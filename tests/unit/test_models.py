@@ -19,13 +19,15 @@ class TestTranscriptSentence:
 
         sentence = TranscriptSentence(
             sentence_id="AAPL_T001_0001",
-            text="We are investing in AI.",
+            raw_text="We are investing in AI.",
+            cleaned_text="investing ai",
             speaker_type="CEO",
             position=0,
         )
 
         assert sentence.sentence_id == "AAPL_T001_0001"
-        assert sentence.text == "We are investing in AI."
+        assert sentence.raw_text == "We are investing in AI."
+        assert sentence.cleaned_text == "investing ai"
         assert sentence.speaker_type == "CEO"
         assert sentence.position == 0
 
@@ -35,7 +37,8 @@ class TestTranscriptSentence:
 
         sentence = TranscriptSentence(
             sentence_id="AAPL_T001_0001",
-            text="Some text.",
+            raw_text="Some text.",
+            cleaned_text="text",
             speaker_type=None,
             position=0,
         )
@@ -51,8 +54,8 @@ class TestFirmTranscriptData:
         from cloud.src.models import TranscriptSentence, FirmTranscriptData
 
         sentences = [
-            TranscriptSentence("AAPL_T001_0001", "Sentence one.", "CEO", 0),
-            TranscriptSentence("AAPL_T001_0002", "Sentence two.", "CFO", 1),
+            TranscriptSentence("AAPL_T001_0001", "Sentence one.", "sentence one", "CEO", 0),
+            TranscriptSentence("AAPL_T001_0002", "Sentence two.", "sentence two", "CFO", 1),
         ]
 
         firm_data = FirmTranscriptData(
@@ -87,7 +90,7 @@ class TestTranscriptData:
         """TranscriptData should store firms dict."""
         from cloud.src.models import TranscriptSentence, FirmTranscriptData, TranscriptData
 
-        sentences = [TranscriptSentence("AAPL_T001_0001", "Test.", "CEO", 0)]
+        sentences = [TranscriptSentence("AAPL_T001_0001", "Test.", "test", "CEO", 0)]
         firm = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
         data = TranscriptData(firms={"1001": firm})
@@ -96,19 +99,20 @@ class TestTranscriptData:
         assert data.firms["1001"].firm_name == "Apple Inc."
 
     def test_get_firm_sentences(self):
-        """TranscriptData.get_firm_sentences should return list of texts."""
+        """TranscriptData.get_firm_sentences should return list of cleaned texts."""
         from cloud.src.models import TranscriptSentence, FirmTranscriptData, TranscriptData
 
         sentences = [
-            TranscriptSentence("AAPL_T001_0001", "First sentence.", "CEO", 0),
-            TranscriptSentence("AAPL_T001_0002", "Second sentence.", "CFO", 1),
+            TranscriptSentence("AAPL_T001_0001", "First sentence.", "first sentence", "CEO", 0),
+            TranscriptSentence("AAPL_T001_0002", "Second sentence.", "second sentence", "CFO", 1),
         ]
         firm = FirmTranscriptData("1001", "Apple Inc.", sentences)
         data = TranscriptData(firms={"1001": firm})
 
         texts = data.get_firm_sentences("1001")
 
-        assert texts == ["First sentence.", "Second sentence."]
+        # get_firm_sentences returns cleaned_text
+        assert texts == ["first sentence", "second sentence"]
 
     def test_get_all_firm_ids(self):
         """TranscriptData.get_all_firm_ids should return list of firm IDs."""

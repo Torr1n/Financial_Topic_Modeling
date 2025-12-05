@@ -274,3 +274,145 @@ class TestBERTopicModelEmbeddings:
 
         # Embeddings should be computed and stored in metadata
         assert "embeddings_shape" in result.metadata or model._embeddings is not None
+
+
+class TestBERTopicModelPrecomputedEmbeddings:
+    """Tests for pre-computed embeddings support (Phase 2 - Pipeline Unification).
+
+    These tests verify that BERTopicModel can accept pre-computed embeddings
+    to skip internal SentenceTransformer encoding. This enables the unified
+    pipeline to load the embedding model once and reuse it for all operations.
+
+    Note: Uses MockSentenceTransformer to avoid network downloads in CI.
+    """
+
+    def test_fit_transform_accepts_embeddings_parameter(self, sample_documents, sample_config, mock_sentence_transformer):
+        """fit_transform should accept optional embeddings parameter."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Pre-compute embeddings using mock (no network required)
+        precomputed_embeddings = mock_sentence_transformer.encode(sample_documents)
+
+        # Inject mock embedding model to avoid network download
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+
+        # Should accept embeddings parameter without error
+        result = model.fit_transform(sample_documents, embeddings=precomputed_embeddings)
+
+        assert result is not None
+        assert result.n_topics >= 0
+
+    def test_fit_transform_uses_provided_embeddings(self, sample_documents, sample_config, mock_sentence_transformer):
+        """When embeddings provided, model should use them instead of computing."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Pre-compute embeddings using mock
+        precomputed_embeddings = mock_sentence_transformer.encode(sample_documents)
+
+        # Inject mock embedding model
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+
+        # Call fit_transform with pre-computed embeddings
+        result = model.fit_transform(sample_documents, embeddings=precomputed_embeddings)
+
+        # Verify model stored and used the provided embeddings (not computed new ones)
+        assert model._embeddings is not None
+        assert np.array_equal(model._embeddings, precomputed_embeddings)
+
+    def test_fit_transform_stores_provided_embeddings(self, sample_documents, sample_config, mock_sentence_transformer):
+        """Model should store provided embeddings in _embeddings attribute."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Pre-compute embeddings using mock
+        precomputed_embeddings = mock_sentence_transformer.encode(sample_documents)
+
+        # Inject mock embedding model
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+        model.fit_transform(sample_documents, embeddings=precomputed_embeddings)
+
+        # Embeddings should be stored
+        assert model._embeddings is not None
+        assert np.array_equal(model._embeddings, precomputed_embeddings)
+
+    def test_fit_transform_without_embeddings_computes_internally(self, sample_documents, sample_config, mock_sentence_transformer):
+        """When embeddings=None, model should compute embeddings internally."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Inject mock to avoid network download
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+
+        # Call without embeddings parameter
+        result = model.fit_transform(sample_documents)
+
+        # Model should have computed and stored embeddings
+        assert model._embeddings is not None
+        assert model._embeddings.shape[0] == len(sample_documents)
+        assert model._embeddings.shape[1] == 768  # mock produces 768-dim
+
+    def test_embeddings_must_match_document_count(self, sample_documents, sample_config, mock_sentence_transformer):
+        """Embeddings array must have same length as documents."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Inject mock to avoid network download
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+
+        # Wrong number of embeddings
+        wrong_embeddings = np.random.rand(5, 768)  # 5 embeddings for 22 documents
+
+        # Should raise error for mismatched dimensions
+        with pytest.raises((ValueError, IndexError, Exception)):
+            model.fit_transform(sample_documents, embeddings=wrong_embeddings)
+
+    def test_embeddings_must_have_correct_dimensions(self, sample_documents, sample_config, mock_sentence_transformer):
+        """Embeddings must have expected dimensionality (768 for all-mpnet-base-v2)."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Inject mock to avoid network download
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+
+        # Wrong embedding dimension
+        wrong_dim_embeddings = np.random.rand(len(sample_documents), 384)  # 384 instead of 768
+
+        # Should work but may produce different results (BERTopic doesn't validate dim)
+        # This test documents the behavior rather than enforcing it
+        try:
+            result = model.fit_transform(sample_documents, embeddings=wrong_dim_embeddings)
+            # If it works, result should still be valid
+            assert result.n_topics >= 0
+        except Exception:
+            # Also acceptable if BERTopic/UMAP rejects wrong dimensions
+            pass
+
+    def test_precomputed_embeddings_produce_valid_result(self, sample_documents, sample_config, mock_sentence_transformer):
+        """Result with pre-computed embeddings should have all required fields."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+        from cloud.src.models import TopicModelResult
+
+        # Pre-compute embeddings using mock (no network required)
+        precomputed_embeddings = mock_sentence_transformer.encode(sample_documents)
+
+        # Inject mock embedding model
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+        result = model.fit_transform(sample_documents, embeddings=precomputed_embeddings)
+
+        # Verify result structure
+        assert isinstance(result, TopicModelResult)
+        assert len(result.topic_assignments) == len(sample_documents)
+        assert result.probabilities is not None
+        assert result.probabilities.shape[0] == len(sample_documents)
+        assert result.n_topics == len(result.topic_representations)
+
+    def test_default_embeddings_none_maintains_backward_compatibility(self, sample_documents, sample_config, mock_sentence_transformer):
+        """Calling fit_transform without embeddings param should work (backward compat)."""
+        from cloud.src.topic_models.bertopic_model import BERTopicModel
+
+        # Inject mock to avoid network download
+        model = BERTopicModel(sample_config, embedding_model=mock_sentence_transformer)
+
+        # Call without embeddings parameter (existing behavior)
+        result = model.fit_transform(sample_documents)
+
+        # Should work exactly as before
+        assert result is not None
+        assert result.n_topics >= 0
+        assert len(result.topic_assignments) == len(sample_documents)

@@ -13,7 +13,9 @@ Design Philosophy:
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
+
+import numpy as np
 
 from cloud.src.models import TopicModelResult, TranscriptData
 
@@ -34,12 +36,21 @@ class TopicModel(ABC):
     """
 
     @abstractmethod
-    def fit_transform(self, documents: List[str]) -> TopicModelResult:
+    def fit_transform(
+        self,
+        documents: List[str],
+        embeddings: Optional[np.ndarray] = None,
+    ) -> TopicModelResult:
         """
         Fit the topic model and transform documents to topics.
 
         Args:
             documents: List of document texts (sentences in our pipeline)
+            embeddings: Optional pre-computed embeddings. If provided, the model
+                       should use these instead of computing embeddings internally.
+                       Shape: (len(documents), embedding_dim). Default: None.
+                       This enables the unified pipeline to load the embedding
+                       model once and pass pre-computed embeddings for efficiency.
 
         Returns:
             TopicModelResult with:

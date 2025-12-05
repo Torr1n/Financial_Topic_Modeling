@@ -90,15 +90,19 @@ class ThemeAggregator:
         self, firm_results: List[Dict]
     ) -> tuple[List[str], List[Dict]]:
         """
-        Extract topic representations as "documents" for theme modeling.
+        Extract topic documents for theme modeling.
+
+        Phase 3: Uses LLM summaries for clustering when available,
+        falling back to keyword representation if summary is missing.
+        This provides richer semantic content for theme clustering.
 
         Args:
             firm_results: List of FirmTopicOutput dicts
 
         Returns:
             (topic_docs, topic_metadata) - Lists aligned by index
-            topic_docs: List of representation strings
-            topic_metadata: List of dicts with firm_id, topic_id, representation, size
+            topic_docs: List of summary/representation strings for clustering
+            topic_metadata: List of dicts with firm_id, topic_id, representation, summary, size
         """
         topic_docs = []
         topic_metadata = []
@@ -113,15 +117,22 @@ class ThemeAggregator:
 
             for topic in firm_result.get("topics", []):
                 representation = topic.get("representation", "")
-                if not representation:
-                    logger.warning(f"Skipping topic {topic.get('topic_id')} from firm {firm_id}: empty representation")
+
+                # Phase 3: Use summary for clustering when available (richer semantic text)
+                # Fall back to representation (keywords) if summary not present
+                summary = topic.get("summary", "")
+                doc_text = summary if summary else representation
+
+                if not doc_text:
+                    logger.warning(f"Skipping topic {topic.get('topic_id')} from firm {firm_id}: empty text")
                     continue
 
-                topic_docs.append(representation)
+                topic_docs.append(doc_text)
                 topic_metadata.append({
                     "firm_id": firm_id,
                     "topic_id": topic["topic_id"],
-                    "representation": representation,
+                    "representation": representation,  # Keywords preserved
+                    "summary": summary or representation,  # For downstream use
                     "size": topic.get("size", 0),
                 })
 

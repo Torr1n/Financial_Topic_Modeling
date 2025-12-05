@@ -36,8 +36,8 @@ class TestFirmProcessorInit:
 class TestFirmProcessorProcess:
     """Tests for FirmProcessor.process method."""
 
-    def test_process_returns_dict(self, sample_config):
-        """process() should return a dict (FirmTopicOutput schema)."""
+    def test_process_returns_tuple(self, sample_config):
+        """process() should return a tuple of (dict, topic_assignments)."""
         from cloud.src.firm_processor import FirmProcessor
         from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
 
@@ -54,14 +54,17 @@ class TestFirmProcessorProcess:
         processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
-            TranscriptSentence("1001_T001_0000", "AI investment.", "CEO", 0),
-            TranscriptSentence("1001_T001_0001", "Revenue grew.", "CFO", 1),
+            TranscriptSentence("1001_T001_0000", "AI investment.", "AI investment.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Revenue grew.", "Revenue grew.", "CFO", 1),
         ]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
         result = processor.process(firm_data)
 
-        assert isinstance(result, dict)
+        assert isinstance(result, tuple)
+        output, topic_assignments = result
+        assert isinstance(output, dict)
+        assert isinstance(topic_assignments, np.ndarray)
 
     def test_process_calls_model_fit_transform(self, sample_config):
         """process() should call model.fit_transform with sentence texts."""
@@ -81,8 +84,8 @@ class TestFirmProcessorProcess:
         processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
-            TranscriptSentence("1001_T001_0000", "AI investment.", "CEO", 0),
-            TranscriptSentence("1001_T001_0001", "Revenue grew.", "CFO", 1),
+            TranscriptSentence("1001_T001_0000", "AI investment.", "AI investment.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Revenue grew.", "Revenue grew.", "CFO", 1),
         ]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
@@ -103,18 +106,18 @@ class TestFirmTopicOutputSchema:
 
         processor = FirmProcessor(mock_topic_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(10)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(10)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
         # Required fields per plan
-        assert "firm_id" in result
-        assert "firm_name" in result
-        assert "n_topics" in result
-        assert "topics" in result
-        assert "outlier_sentence_ids" in result
-        assert "metadata" in result
+        assert "firm_id" in output
+        assert "firm_name" in output
+        assert "n_topics" in output
+        assert "topics" in output
+        assert "outlier_sentence_ids" in output
+        assert "metadata" in output
 
     def test_output_firm_id_and_name(self, mock_topic_model, sample_config):
         """Output should preserve firm_id and firm_name."""
@@ -123,13 +126,13 @@ class TestFirmTopicOutputSchema:
 
         processor = FirmProcessor(mock_topic_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(10)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(10)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
-        assert result["firm_id"] == "1001"
-        assert result["firm_name"] == "Apple Inc."
+        assert output["firm_id"] == "1001"
+        assert output["firm_name"] == "Apple Inc."
 
     def test_topic_structure(self, mock_topic_model, sample_config):
         """Each topic should have required fields."""
@@ -138,12 +141,12 @@ class TestFirmTopicOutputSchema:
 
         processor = FirmProcessor(mock_topic_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(10)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(10)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
-        for topic in result["topics"]:
+        for topic in output["topics"]:
             assert "topic_id" in topic
             assert "representation" in topic
             assert "keywords" in topic
@@ -159,12 +162,12 @@ class TestFirmTopicOutputSchema:
 
         processor = FirmProcessor(mock_topic_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(10)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(10)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
-        assert result["n_topics"] == len(result["topics"])
+        assert output["n_topics"] == len(output["topics"])
 
     def test_metadata_has_required_fields(self, mock_topic_model, sample_config):
         """Metadata should have processing_timestamp, model_config, n_sentences_processed."""
@@ -173,15 +176,15 @@ class TestFirmTopicOutputSchema:
 
         processor = FirmProcessor(mock_topic_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(10)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(10)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
-        assert "processing_timestamp" in result["metadata"]
-        assert "model_config" in result["metadata"]
-        assert "n_sentences_processed" in result["metadata"]
-        assert result["metadata"]["n_sentences_processed"] == 10
+        assert "processing_timestamp" in output["metadata"]
+        assert "model_config" in output["metadata"]
+        assert "n_sentences_processed" in output["metadata"]
+        assert output["metadata"]["n_sentences_processed"] == 10
 
 
 class TestFirmProcessorSentenceIdMapping:
@@ -213,28 +216,28 @@ class TestFirmProcessorSentenceIdMapping:
         processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
-            TranscriptSentence("1001_T001_0000", "Sentence 0.", "CEO", 0),
-            TranscriptSentence("1001_T001_0001", "Sentence 1.", "CEO", 1),
-            TranscriptSentence("1001_T001_0002", "Sentence 2.", "CFO", 2),
-            TranscriptSentence("1001_T001_0003", "Sentence 3.", "CFO", 3),
-            TranscriptSentence("1001_T001_0004", "Sentence 4.", "COO", 4),
+            TranscriptSentence("1001_T001_0000", "Sentence 0.", "Sentence 0.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Sentence 1.", "Sentence 1.", "CEO", 1),
+            TranscriptSentence("1001_T001_0002", "Sentence 2.", "Sentence 2.", "CFO", 2),
+            TranscriptSentence("1001_T001_0003", "Sentence 3.", "Sentence 3.", "CFO", 3),
+            TranscriptSentence("1001_T001_0004", "Sentence 4.", "Sentence 4.", "COO", 4),
         ]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
         # Topic 0 should have sentences 0 and 1 (ordered by probability: 0.8 > 0.7)
-        topic_0 = next(t for t in result["topics"] if t["topic_id"] == 0)
+        topic_0 = next(t for t in output["topics"] if t["topic_id"] == 0)
         assert topic_0["sentence_ids"] == ["1001_T001_0000", "1001_T001_0001"]
         assert topic_0["size"] == 2
 
         # Topic 1 should have sentences 2 and 3 (ordered by probability: 0.8 > 0.7)
-        topic_1 = next(t for t in result["topics"] if t["topic_id"] == 1)
+        topic_1 = next(t for t in output["topics"] if t["topic_id"] == 1)
         assert topic_1["sentence_ids"] == ["1001_T001_0002", "1001_T001_0003"]
         assert topic_1["size"] == 2
 
         # Outlier should be sentence 4
-        assert result["outlier_sentence_ids"] == ["1001_T001_0004"]
+        assert output["outlier_sentence_ids"] == ["1001_T001_0004"]
 
 
 class TestFirmProcessorOutlierHandling:
@@ -264,15 +267,15 @@ class TestFirmProcessorOutlierHandling:
 
         processor = FirmProcessor(mock_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(4)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(4)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
-        assert len(result["outlier_sentence_ids"]) == 3
-        assert "1001_T001_0000" in result["outlier_sentence_ids"]
-        assert "1001_T001_0001" in result["outlier_sentence_ids"]
-        assert "1001_T001_0003" in result["outlier_sentence_ids"]
+        assert len(output["outlier_sentence_ids"]) == 3
+        assert "1001_T001_0000" in output["outlier_sentence_ids"]
+        assert "1001_T001_0001" in output["outlier_sentence_ids"]
+        assert "1001_T001_0003" in output["outlier_sentence_ids"]
 
     def test_all_outliers_gives_empty_topics(self, sample_config):
         """If all sentences are outliers, topics list should be empty."""
@@ -294,14 +297,14 @@ class TestFirmProcessorOutlierHandling:
 
         processor = FirmProcessor(mock_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(3)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(3)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
-        assert result["n_topics"] == 0
-        assert result["topics"] == []
-        assert len(result["outlier_sentence_ids"]) == 3
+        assert output["n_topics"] == 0
+        assert output["topics"] == []
+        assert len(output["outlier_sentence_ids"]) == 3
 
 
 class TestFirmProcessorJsonSerializable:
@@ -315,13 +318,13 @@ class TestFirmProcessorJsonSerializable:
 
         processor = FirmProcessor(mock_topic_model, sample_config)
 
-        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", "CEO", i) for i in range(10)]
+        sentences = [TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i) for i in range(10)]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
         # Should not raise
-        json_str = json.dumps(result, default=str)
+        json_str = json.dumps(output, default=str)
         assert isinstance(json_str, str)
 
 
@@ -356,22 +359,22 @@ class TestFirmProcessorSentenceOrdering:
         processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
-            TranscriptSentence("1001_T001_0000", "Sentence 0.", "CEO", 0),
-            TranscriptSentence("1001_T001_0001", "Sentence 1.", "CEO", 1),
-            TranscriptSentence("1001_T001_0002", "Sentence 2.", "CFO", 2),
-            TranscriptSentence("1001_T001_0003", "Sentence 3.", "CFO", 3),
-            TranscriptSentence("1001_T001_0004", "Sentence 4.", "COO", 4),
+            TranscriptSentence("1001_T001_0000", "Sentence 0.", "Sentence 0.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Sentence 1.", "Sentence 1.", "CEO", 1),
+            TranscriptSentence("1001_T001_0002", "Sentence 2.", "Sentence 2.", "CFO", 2),
+            TranscriptSentence("1001_T001_0003", "Sentence 3.", "Sentence 3.", "CFO", 3),
+            TranscriptSentence("1001_T001_0004", "Sentence 4.", "Sentence 4.", "COO", 4),
         ]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
         # Topic 0: doc 2 (0.9) > doc 0 (0.8) > doc 1 (0.6)
-        topic_0 = next(t for t in result["topics"] if t["topic_id"] == 0)
+        topic_0 = next(t for t in output["topics"] if t["topic_id"] == 0)
         assert topic_0["sentence_ids"] == ["1001_T001_0002", "1001_T001_0000", "1001_T001_0001"]
 
         # Topic 1: doc 4 (0.8) > doc 3 (0.7)
-        topic_1 = next(t for t in result["topics"] if t["topic_id"] == 1)
+        topic_1 = next(t for t in output["topics"] if t["topic_id"] == 1)
         assert topic_1["sentence_ids"] == ["1001_T001_0004", "1001_T001_0003"]
 
     def test_sentence_ordering_handles_equal_probabilities(self, sample_config):
@@ -399,16 +402,189 @@ class TestFirmProcessorSentenceOrdering:
         processor = FirmProcessor(mock_model, sample_config)
 
         sentences = [
-            TranscriptSentence("1001_T001_0000", "Sentence 0.", "CEO", 0),
-            TranscriptSentence("1001_T001_0001", "Sentence 1.", "CEO", 1),
-            TranscriptSentence("1001_T001_0002", "Sentence 2.", "CEO", 2),
+            TranscriptSentence("1001_T001_0000", "Sentence 0.", "Sentence 0.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Sentence 1.", "Sentence 1.", "CEO", 1),
+            TranscriptSentence("1001_T001_0002", "Sentence 2.", "Sentence 2.", "CEO", 2),
         ]
         firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
 
-        result = processor.process(firm_data)
+        output, topic_assignments = processor.process(firm_data)
 
         # With equal probabilities, should have some consistent ordering
-        topic_0 = result["topics"][0]
+        topic_0 = output["topics"][0]
         assert len(topic_0["sentence_ids"]) == 3
         # All three sentences should be present
         assert set(topic_0["sentence_ids"]) == {"1001_T001_0000", "1001_T001_0001", "1001_T001_0002"}
+
+
+class TestFirmProcessorPrecomputedEmbeddings:
+    """Tests for pre-computed embeddings support (Phase 2 - Pipeline Unification).
+
+    FirmProcessor should accept optional pre-computed embeddings and pass
+    them to the topic model. This enables the unified pipeline to compute
+    embeddings once and reuse them for storage in PostgreSQL.
+    """
+
+    def test_process_accepts_embeddings_parameter(self, sample_config):
+        """process() should accept optional embeddings parameter."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([[0.8, 0.2], [0.3, 0.7]]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence("1001_T001_0000", "AI investment.", "AI investment.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Revenue grew.", "Revenue grew.", "CFO", 1),
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        # Pre-computed embeddings
+        embeddings = np.random.rand(2, 768)
+
+        # Should accept embeddings without error and return tuple
+        output, topic_assignments = processor.process(firm_data, embeddings=embeddings)
+
+        assert isinstance(output, dict)
+        assert "firm_id" in output
+        assert isinstance(topic_assignments, np.ndarray)
+
+    def test_process_passes_embeddings_to_model(self, sample_config):
+        """process() should pass embeddings to model.fit_transform()."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([[0.8, 0.2], [0.3, 0.7]]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence("1001_T001_0000", "AI investment.", "AI investment.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Revenue grew.", "Revenue grew.", "CFO", 1),
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        # Pre-computed embeddings
+        embeddings = np.random.rand(2, 768)
+
+        processor.process(firm_data, embeddings=embeddings)
+
+        # Verify fit_transform was called with embeddings
+        mock_model.fit_transform.assert_called_once()
+        call_kwargs = mock_model.fit_transform.call_args.kwargs
+        assert "embeddings" in call_kwargs
+        assert np.array_equal(call_kwargs["embeddings"], embeddings)
+
+    def test_process_without_embeddings_calls_model_normally(self, sample_config):
+        """process() without embeddings should call model without embeddings param."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([[0.8, 0.2], [0.3, 0.7]]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence("1001_T001_0000", "AI investment.", "AI investment.", "CEO", 0),
+            TranscriptSentence("1001_T001_0001", "Revenue grew.", "Revenue grew.", "CFO", 1),
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        # Call without embeddings
+        processor.process(firm_data)
+
+        # Verify fit_transform called without embeddings (or embeddings=None)
+        mock_model.fit_transform.assert_called_once()
+        call_kwargs = mock_model.fit_transform.call_args.kwargs
+        # Either no embeddings key, or embeddings=None
+        assert call_kwargs.get("embeddings") is None
+
+
+class TestFirmProcessorTopicAssignments:
+    """Tests for topic_assignments access (needed for Postgres sentence→topic mapping).
+
+    The unified pipeline needs access to topic_assignments array to set
+    sentence.topic_id before bulk insert (avoiding insert-then-update pattern).
+    """
+
+    def test_process_returns_topic_assignments(self, sample_config):
+        """process() should return topic_assignments for sentence→topic mapping."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        expected_assignments = np.array([0, 0, 1, 1, -1])
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=expected_assignments,
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([
+                [0.8, 0.2], [0.7, 0.3], [0.3, 0.7], [0.2, 0.8], [0.5, 0.5]
+            ]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i)
+            for i in range(5)
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        # process() returns (output_dict, topic_assignments)
+        output, topic_assignments = processor.process(firm_data)
+
+        assert isinstance(output, dict)
+        assert np.array_equal(topic_assignments, expected_assignments)
+
+    def test_topic_assignments_length_matches_sentences(self, sample_config):
+        """topic_assignments should have one entry per sentence."""
+        from cloud.src.firm_processor import FirmProcessor
+        from cloud.src.models import FirmTranscriptData, TranscriptSentence, TopicModelResult
+
+        mock_model = MagicMock()
+        mock_model.fit_transform.return_value = TopicModelResult(
+            topic_assignments=np.array([0, 1, 0, -1, 1]),
+            n_topics=2,
+            topic_representations={0: "Topic A", 1: "Topic B"},
+            topic_keywords={0: ["ai"], 1: ["revenue"]},
+            probabilities=np.array([
+                [0.8, 0.2], [0.3, 0.7], [0.7, 0.3], [0.5, 0.5], [0.2, 0.8]
+            ]),
+        )
+
+        processor = FirmProcessor(mock_model, sample_config)
+
+        sentences = [
+            TranscriptSentence(f"1001_T001_{i:04d}", f"Sentence {i}.", f"Sentence {i}.", "CEO", i)
+            for i in range(5)
+        ]
+        firm_data = FirmTranscriptData("1001", "Apple Inc.", sentences)
+
+        output, topic_assignments = processor.process(firm_data)
+
+        assert len(topic_assignments) == len(sentences)

@@ -36,6 +36,7 @@ from pathlib import Path
 
 import yaml
 
+
 # Setup logging early
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -142,15 +143,17 @@ def main():
         # Check if firm was found
         if firm_id not in transcript_data.firms:
             logger.error(f"Firm {firm_id} not found in data source")
-            logger.info(f"Available firm IDs: {connector.get_available_firm_ids()[:10]}")
+            logger.info(
+                f"Available firm IDs: {connector.get_available_firm_ids()[:10]}"
+            )
             sys.exit(1)
 
         firm_data = transcript_data.firms[firm_id]
         logger.info(f"Loaded {len(firm_data.sentences)} sentences for {firm_id}")
 
-        # 6. Process
-        result = processor.process(firm_data)
-        logger.info(f"Discovered {result['n_topics']} topics")
+        # 6. Process (returns tuple of output dict and topic_assignments)
+        output, topic_assignments = processor.process(firm_data)
+        logger.info(f"Discovered {output['n_topics']} topics")
 
         # 7. Save output
         if local_mode:
@@ -163,7 +166,7 @@ def main():
             output_path = os.path.join(output_dir, f"{firm_id}_topics.json")
 
             with open(output_path, "w") as f:
-                json.dump(result, f, indent=2, default=str)
+                json.dump(output, f, indent=2, default=str)
 
             logger.info(f"Saved to {output_path}")
         else:
@@ -173,12 +176,12 @@ def main():
 
             # Write JSON to S3
             s3_key = f"{os.environ.get('S3_OUTPUT_PREFIX', 'firm-topics/')}{firm_id}_topics.json"
-            upload_json(os.environ["S3_OUTPUT_BUCKET"], s3_key, result)
+            upload_json(os.environ["S3_OUTPUT_BUCKET"], s3_key, output)
             logger.info(f"Uploaded to s3://{os.environ['S3_OUTPUT_BUCKET']}/{s3_key}")
 
             # Write sentences to DynamoDB
             dynamo_writer = MapPhaseDynamoDBWriter(os.environ["DYNAMODB_TABLE"])
-            dynamo_writer.write_firm_sentences(result, firm_data.sentences)
+            dynamo_writer.write_firm_sentences(output, firm_data.sentences)
             logger.info("Wrote sentences to DynamoDB")
 
         logger.info("Map phase completed successfully")
