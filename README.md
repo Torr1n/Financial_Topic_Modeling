@@ -10,7 +10,7 @@ An NLP research pipeline that discovers universal investment themes by analyzing
 
 Earnings calls contain rich, unstructured information about corporate strategy, market conditions, and industry trends. While individual transcripts are valuable, the real insight comes from identifying **cross-firm themes**—topics that emerge across multiple companies, revealing broader market narratives.
 
-This pipeline answers: *"What are the universal themes being discussed across all firms in a given quarter?"*
+This pipeline answers: _"What are the universal themes being discussed across all firms in a given quarter?"_
 
 ---
 
@@ -18,16 +18,17 @@ This pipeline answers: *"What are the universal themes being discussed across al
 
 **Validated Cloud Run (MAG7 + Tech Firms):**
 
-| Metric | Value |
-|--------|-------|
-| Firms Processed | 11 |
-| Sentences Analyzed | ~5,000 |
-| Firm-Level Topics | ~350 |
-| Cross-Firm Themes | ~19 |
-| Processing Time | ~15 minutes |
-| Infrastructure Cost | ~$1.30 |
+| Metric              | Value       |
+| ------------------- | ----------- |
+| Firms Processed     | 11          |
+| Sentences Analyzed  | ~5,000      |
+| Firm-Level Topics   | ~350        |
+| Cross-Firm Themes   | ~19         |
+| Processing Time     | ~15 minutes |
+| Infrastructure Cost | ~$1.30      |
 
 **Example Themes Discovered:**
+
 - AI infrastructure investment and GPU demand
 - Cloud migration and digital transformation
 - Supply chain optimization
@@ -188,7 +189,7 @@ All pipeline settings are in `cloud/config/production.yaml`:
 ```yaml
 # Embedding model
 embedding:
-  model: "all-mpnet-base-v2"  # or "Qwen/Qwen3-Embedding-8B" for SOTA
+  model: "all-mpnet-base-v2" # or "Qwen/Qwen3-Embedding-8B" for SOTA
   dimension: 768
   device: "cuda"
 
@@ -225,14 +226,15 @@ themes (cross-firm)
 
 **PostgreSQL Tables:**
 
-| Table | Description | Key Fields |
-|-------|-------------|------------|
-| `firms` | Companies processed | company_id, name, processed_at |
-| `sentences` | Transcript sentences | raw_text, cleaned_text, embedding |
-| `topics` | Firm-level topics | representation, summary, embedding |
-| `themes` | Cross-firm themes | name, description, embedding, n_firms |
+| Table       | Description          | Key Fields                            |
+| ----------- | -------------------- | ------------------------------------- |
+| `firms`     | Companies processed  | company_id, name, processed_at        |
+| `sentences` | Transcript sentences | raw_text, cleaned_text, embedding     |
+| `topics`    | Firm-level topics    | representation, summary, embedding    |
+| `themes`    | Cross-firm themes    | name, description, embedding, n_firms |
 
 **Vector Search Enabled:**
+
 ```sql
 -- Find similar topics by semantic meaning
 SELECT * FROM topics
@@ -262,24 +264,3 @@ LIMIT 10;
 - [ ] Interactive dashboard for theme exploration
 - [ ] WRDS direct integration for live transcript data
 - [ ] Multi-quarter longitudinal analysis
-
----
-
-## Research Team
-
-Built as part of financial NLP research. For questions or collaboration, contact the repository maintainers.
-
----
-
-## License
-
-[Add appropriate license]
-
----
-
-## Acknowledgments
-
-- BERTopic by Maarten Grootendorst
-- Sentence Transformers by UKPLab
-- RAPIDS/cuML by NVIDIA
-- xAI for Grok API access

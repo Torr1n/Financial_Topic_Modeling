@@ -54,18 +54,20 @@ python -c "from cloud.src.pipeline import UnifiedPipeline; print('OK')"
 ### IDE Setup (VS Code)
 
 Recommended extensions:
+
 - Python (Microsoft)
 - Pylance
 - Black Formatter
 - GitLens
 
 `.vscode/settings.json`:
+
 ```json
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/venv/bin/python",
-    "python.formatting.provider": "black",
-    "python.linting.enabled": true,
-    "python.linting.pylintEnabled": true
+  "python.defaultInterpreterPath": "${workspaceFolder}/venv/bin/python",
+  "python.formatting.provider": "black",
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": true
 }
 ```
 
@@ -105,6 +107,7 @@ cloud/
 ### Key Abstractions
 
 **TopicModel Interface** (`interfaces.py`):
+
 ```python
 class TopicModel(ABC):
     @abstractmethod
@@ -114,6 +117,7 @@ class TopicModel(ABC):
 ```
 
 **DataConnector Interface** (`interfaces.py`):
+
 ```python
 class DataConnector(ABC):
     @abstractmethod
@@ -333,6 +337,7 @@ The pipeline uses SQLAlchemy ORM. Schema changes require:
 1. **Update models** in `cloud/src/database/models.py`
 
 2. **Recreate tables** (development):
+
 ```python
 Base.metadata.drop_all(engine)
 Base.metadata.create_all(engine)
@@ -382,6 +387,7 @@ logging.basicConfig(level=logging.DEBUG)
 ```
 
 Or set environment variable:
+
 ```bash
 export LOG_LEVEL=DEBUG
 ```
@@ -389,6 +395,7 @@ export LOG_LEVEL=DEBUG
 ### Database Queries
 
 Enable SQLAlchemy query logging:
+
 ```python
 import logging
 logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
@@ -397,6 +404,7 @@ logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 ### LLM Prompts
 
 The XAIClient logs prompts when `log_prompt=True`:
+
 ```python
 summary = await client.generate_topic_summary(
     keywords=keywords,
@@ -408,12 +416,14 @@ summary = await client.generate_topic_summary(
 ### GPU Memory Issues
 
 Monitor GPU memory:
+
 ```python
 import torch
 print(f"GPU memory: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
 ```
 
 Clear cache if needed:
+
 ```python
 torch.cuda.empty_cache()
 ```

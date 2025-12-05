@@ -103,6 +103,7 @@ terraform apply
 ```
 
 **Expected Output:**
+
 ```
 Apply complete! Resources: 9 added, 0 changed, 0 destroyed.
 
@@ -116,6 +117,7 @@ s3_bucket_name = "ftm-pipeline-xxxxxxxx"
 ```
 
 **Resources Created:**
+
 - RDS PostgreSQL instance (`ftm-db`)
 - S3 bucket for code/data
 - EC2 security group (SSH from your IP)
@@ -124,12 +126,12 @@ s3_bucket_name = "ftm-pipeline-xxxxxxxx"
 
 ### 3. Verify in AWS Console
 
-| Service | Check |
-|---------|-------|
-| RDS | `ftm-db` exists, status "Available" |
-| S3 | `ftm-pipeline-xxxxx` bucket exists |
-| EC2 → Security Groups | `ftm-ec2-sg` and `ftm-db-sg` exist |
-| IAM → Roles | `ftm-ec2-pipeline` exists |
+| Service               | Check                               |
+| --------------------- | ----------------------------------- |
+| RDS                   | `ftm-db` exists, status "Available" |
+| S3                    | `ftm-pipeline-xxxxx` bucket exists  |
+| EC2 → Security Groups | `ftm-ec2-sg` and `ftm-db-sg` exist  |
+| IAM → Roles           | `ftm-ec2-pipeline` exists           |
 
 ---
 
@@ -145,6 +147,7 @@ chmod +x *.sh
 ```
 
 **Expected Output:**
+
 ```
 === Uploading Pipeline to S3 ===
 Target bucket: ftm-pipeline-xxxxxxxx
@@ -181,6 +184,7 @@ TEST_MODE=mag7 ./launch_pipeline.sh
 ```
 
 **Expected Output:**
+
 ```
 === Launching FTM Pipeline ===
 XAI_API_KEY loaded from .env
@@ -228,13 +232,13 @@ MAX_FIRMS=100 ./launch_pipeline.sh
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TEST_MODE` | `mag7` for 11 test firms | (all firms) |
-| `MAX_FIRMS` | Limit number of firms | (unlimited) |
-| `INSTANCE_TYPE` | EC2 instance type | `g4dn.2xlarge` |
-| `USE_SPOT` | Use spot pricing | `true` |
-| `AMI_ID_OVERRIDE` | Manual AMI ID | (auto-detect) |
+| Variable          | Description              | Default        |
+| ----------------- | ------------------------ | -------------- |
+| `TEST_MODE`       | `mag7` for 11 test firms | (all firms)    |
+| `MAX_FIRMS`       | Limit number of firms    | (unlimited)    |
+| `INSTANCE_TYPE`   | EC2 instance type        | `g4dn.2xlarge` |
+| `USE_SPOT`        | Use spot pricing         | `true`         |
+| `AMI_ID_OVERRIDE` | Manual AMI ID            | (auto-detect)  |
 
 ---
 
@@ -358,6 +362,7 @@ aws ec2 authorize-security-group-ingress \
 ```
 
 **DBeaver Connection:**
+
 - Host: `ftm-db.xxxxx.us-east-1.rds.amazonaws.com`
 - Port: `5432`
 - Database: `ftm`
@@ -390,6 +395,7 @@ cd cloud/scripts
 ```
 
 **Cost While Stopped:**
+
 - Compute: $0/hour
 - Storage: ~$10/month (100GB)
 
@@ -402,13 +408,13 @@ cd cloud/scripts
 
 ### Cost Breakdown
 
-| Component | During Run | After Stop |
-|-----------|-----------|------------|
-| g4dn.2xlarge spot | ~$0.25/hr | $0 (terminated) |
-| RDS db.t4g.large | ~$0.08/hr | $0 (stopped) |
-| RDS storage 100GB | - | ~$10/month |
-| S3 | negligible | negligible |
-| xAI API | $1-5/run | $0 |
+| Component         | During Run | After Stop      |
+| ----------------- | ---------- | --------------- |
+| g4dn.2xlarge spot | ~$0.25/hr  | $0 (terminated) |
+| RDS db.t4g.large  | ~$0.08/hr  | $0 (stopped)    |
+| RDS storage 100GB | -          | ~$10/month      |
+| S3                | negligible | negligible      |
+| xAI API           | $1-5/run   | $0              |
 
 **MAG7 Test Run:** ~$1-5 total
 **Full Production Run:** ~$5-10 total
