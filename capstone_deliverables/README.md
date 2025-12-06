@@ -217,7 +217,7 @@ LIMIT 5;
 
 | Resource         | Path                                                 |
 | ---------------- | ---------------------------------------------------- |
-| Main README      | [`/README.md`](../README.md)                         |
+| Main README      | [`/cloud/README.md`](../README.md)                   |
 | Architecture     | [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)   |
 | Deployment Guide | [`/docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)       |
 | Configuration    | [`/docs/CONFIGURATION.md`](../docs/CONFIGURATION.md) |
