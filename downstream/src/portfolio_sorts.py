@@ -31,15 +31,20 @@ class PortfolioSorts():
     def crspreturns(self):
         #Extract permnos and edates from dictionary
         permnos = [event["permno"] for event in self.dictionary]
-        
-        # Simple query: Pull 6 months of data starting at 1/1/2023 for all permnos
+
+        # Simple query: Pull data for all permnos
         # This avoids complex OR conditions
         permno_list = ','.join(str(p) for p in permnos)
-        
-        # Fixed date range: 1/1/2023 to 7/1/2023 (6 months)
-        start_date = '2023-01-01'
-        end_date = '2023-07-01'
-        
+
+        # Derive date range from event dates (dynamic, not hardcoded)
+        edates = [pd.to_datetime(event["edate"]) for event in self.dictionary]
+        min_edate = min(edates)
+        max_edate = max(edates)
+
+        # Start from earliest event, end 120 days after latest event
+        start_date = min_edate.strftime('%Y-%m-%d')
+        end_date = (max_edate + pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+
         print(f"Fetching CRSP data for {len(permnos)} firms from {start_date} to {end_date}")
 
         # Use existing connection or create new one
