@@ -59,7 +59,7 @@ Run the bridge script to export themes with PERMNO lookups:
 ```bash
 python -m cloud.src.export.export_for_downstream \
     --db-url postgresql://user:pass@host:port/db \
-    --output downstream_analysis/data/themes_for_sentiment.json
+    --output downstream/data/themes_for_sentiment.json
 ```
 
 Options:
@@ -68,14 +68,14 @@ Options:
 ### 4. Run Downstream Pipeline
 
 ```bash
-cd downstream_analysis
-python run_pipeline.py --themes_file data/themes_for_sentiment.json --output_dir results/
+cd downstream
+python cli.py --themes data/themes_for_sentiment.json --output results/
 ```
 
 Or run individual stages:
 ```bash
-python run_event_study.py --themes_file data/themes_for_sentiment.json
-python run_portfolio_sorts.py --themes_file data/themes_for_sentiment.json
+python cli.py --themes data/themes.json --stages sentiment
+python cli.py --sentiment-file results/sentiment.csv --stages event_study portfolio
 ```
 
 ## Output JSON Format
@@ -113,8 +113,9 @@ The export script produces JSON matching downstream expectations:
 | `cloud/src/database/models.py` | Firm model with `earnings_call_date` |
 | `cloud/scripts/backfill_earnings_dates.py` | One-time WRDS backfill script |
 | `cloud/src/export/export_for_downstream.py` | Main bridge/export script |
-| `downstream_analysis/run_pipeline.py` | Full downstream pipeline |
-| `downstream_analysis/config.py` | Downstream configuration |
+| `downstream/cli.py` | Unified downstream CLI |
+| `downstream/config.py` | Downstream configuration |
+| `downstream/src/` | Core analysis modules |
 
 ## Troubleshooting
 

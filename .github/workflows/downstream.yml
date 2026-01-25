@@ -1,0 +1,49 @@
+name: Downstream Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      themes_file:
+        description: 'Path to themes JSON'
+        required: true
+        type: string
+      stages:
+        description: 'Stages: sentiment, event_study, portfolio, all'
+        required: false
+        default: 'all'
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r downstream/requirements.txt
+
+      - name: Configure WRDS
+        if: contains(inputs.stages, 'event_study') || contains(inputs.stages, 'portfolio') || inputs.stages == 'all'
+        run: |
+          echo "${{ secrets.WRDS_PGPASS }}" > ~/.pgpass
+          chmod 600 ~/.pgpass
+
+      - name: Run pipeline
+        working-directory: downstream
+        run: |
+          python cli.py \
+            --themes "${{ github.event.inputs.themes_file }}" \
+            --stages ${{ github.event.inputs.stages }} \
+            --output results/
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: downstream-results
+          path: downstream/results/
