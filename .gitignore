@@ -1,6 +1,12 @@
 # Claude Code
 .claude/
 
+# IDE
+.idea/
+
+# Data files (too large for git)
+data/
+
 # Legacy MVP code
 Local_BERTopic_MVP/
 

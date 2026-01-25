@@ -121,8 +121,22 @@ class UnifiedPipeline:
 
         # LLM client for topic/theme summarization (Phase 3)
         self._xai_client = self._init_llm_client()
+        self._data_extractor = self._init_data_extractor()
 
         logger.info("UnifiedPipeline initialized")
+
+    def _init_data_extractor(self):
+        """
+        Initialize DataExtractor if API key is present.
+        """
+        api_key = os.environ.get("XAI_API_KEY")
+        if api_key:
+            from cloud.src.llm.data_extractor import DataExtractor
+            logger.info("XAI_API_KEY found - Data extraction enabled")
+            return DataExtractor(config={"api_key": api_key})
+        else:
+            logger.info("XAI_API_KEY not found - Data extraction disabled")
+            return None
 
     def _init_llm_client(self):
         """
@@ -261,6 +275,9 @@ class UnifiedPipeline:
                     topic_assignments=topic_assignments,
                 )
 
+                # Extract structured entities from sentences
+                extracted_entities = self._extract_entities(texts)
+
                 # Write results to Postgres (topics first, then sentences)
                 self._write_firm_results(
                     session=session,
@@ -270,6 +287,7 @@ class UnifiedPipeline:
                     output=output,
                     topic_assignments=topic_assignments,
                     sentence_embeddings=sentence_embeddings,
+                    extracted_entities=extracted_entities,
                 )
 
                 # CHECKPOINT: Mark firm as processed and commit
@@ -348,6 +366,22 @@ class UnifiedPipeline:
             for topic in topics:
                 topic["summary"] = topic["representation"]
 
+    def _extract_entities(self, texts: List[str]) -> List[Dict[str, Any]]:
+        """
+        Extracts structured entities from a list of texts.
+        """
+        if self._data_extractor is None:
+            return []
+
+        async def extract_all():
+            return await self._data_extractor.extract_entities(texts)
+
+        try:
+            return self._run_async(extract_all)
+        except Exception as e:
+            logger.error(f"Entity extraction failed: {e}")
+            return []
+
     def _write_firm_results(
         self,
         session: Session,
@@ -357,6 +391,7 @@ class UnifiedPipeline:
         output: Dict[str, Any],
         topic_assignments: np.ndarray,
         sentence_embeddings: np.ndarray,
+        extracted_entities: List[Dict[str, Any]],
     ) -> None:
         """
         Write firm results to Postgres.
@@ -398,24 +433,43 @@ class UnifiedPipeline:
             topic_id_map[topic["topic_id"]] = db_topic.id
 
         # 3. Build sentence records WITH topic_id already set
-        sentence_records = []
-        for i, sentence in enumerate(firm_data.sentences):
-            # Get topic assignment (-1 for outliers)
+        sentence_objects = []
+        for i, sentence_data in enumerate(firm_data.sentences):
             local_topic_id = int(topic_assignments[i])
-            db_topic_id = topic_id_map.get(local_topic_id)  # None for outliers
+            db_topic_id = topic_id_map.get(local_topic_id)
 
-            sentence_records.append({
-                "firm_id": firm.id,
-                "raw_text": sentence.raw_text,  # Original for observability
-                "cleaned_text": sentence.cleaned_text,  # Preprocessed for topic modeling
-                "position": sentence.position,
-                "speaker_type": sentence.speaker_type,
-                "embedding": sentence_embeddings[i].tolist(),
-                "topic_id": db_topic_id,  # Already set, no update needed
-            })
+            sentence_obj = Sentence(
+                firm_id=firm.id,
+                raw_text=sentence_data.raw_text,
+                cleaned_text=sentence_data.cleaned_text,
+                position=sentence_data.position,
+                speaker_type=sentence_data.speaker_type,
+                embedding=sentence_embeddings[i].tolist(),
+                topic_id=db_topic_id,
+            )
+            sentence_objects.append(sentence_obj)
 
-        # 4. Bulk insert sentences
-        repo.bulk_insert_sentences(sentence_records)
+        # 4. Add sentences to session and flush to get IDs
+        session.add_all(sentence_objects)
+        session.flush()
+
+        # 5. Create and add extracted entities, now that sentences have IDs
+        if extracted_entities:
+            entity_objects = []
+            for i, sentence_obj in enumerate(sentence_objects):
+                # The i-th sentence corresponds to the i-th extraction result
+                extraction_result = extracted_entities[i]
+                for entity_type, entities in extraction_result.items():
+                    for entity in entities:
+                        entity_objects.append(
+                            ExtractedEntity(
+                                sentence_id=sentence_obj.id,
+                                entity_type=entity_type.upper(),
+                                value=entity.get('name'),
+                                confidence=entity.get('confidence'),
+                            )
+                        )
+            session.add_all(entity_objects)
 
     def _get_unprocessed_firm_ids(self, data_source: DataConnector) -> List[str]:
         """
