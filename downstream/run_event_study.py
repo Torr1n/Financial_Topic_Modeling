@@ -20,14 +20,14 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 
-# Add pipeline directory to path
-sys.path.insert(0, str(Path(__file__).parent / 'pipeline'))
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 # Import configuration
 import config
 
 # Import pipeline modules
-from event_study import ThematicES
+from src.event_study import ThematicES
 
 # Configure logging
 logging.basicConfig(

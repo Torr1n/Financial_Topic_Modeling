@@ -23,16 +23,16 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 
-# Add pipeline directory to path
-sys.path.insert(0, str(Path(__file__).parent / 'pipeline'))
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 # Import configuration
 import config
 
 # Import pipeline modules
-from pipeline.thematic_sentiment_analyzer import ThematicSentimentAnalyzer
-from pipeline.event_study import ThematicES
-from pipeline.portfolio_sorts import PortfolioSorts
+from src.thematic_sentiment_analyzer import ThematicSentimentAnalyzer
+from src.event_study import ThematicES
+from src.portfolio_sorts import PortfolioSorts
 
 # Configure logging
 logging.basicConfig(
