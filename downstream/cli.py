@@ -260,7 +260,12 @@ def cmd_run(args):
     if 'event_study' in stages or 'portfolio' in stages:
         try:
             import wrds
+            # Set PostgreSQL env vars so wrds library doesn't prompt
             username = os.environ.get('WRDS_USERNAME', 'torrin')
+            password = os.environ.get('WRDS_PASSWORD', '')
+            os.environ['PGUSER'] = username
+            if password:
+                os.environ['PGPASSWORD'] = password
             wrds_conn = wrds.Connection(wrds_username=username)
             print("WRDS connection established")
         except Exception as e:
@@ -318,7 +323,12 @@ def cmd_event_study(args):
     wrds_conn = None
     try:
         import wrds
+        # Set PostgreSQL env vars so wrds library doesn't prompt
         username = os.environ.get('WRDS_USERNAME', 'torrin')
+        password = os.environ.get('WRDS_PASSWORD', '')
+        os.environ['PGUSER'] = username
+        if password:
+            os.environ['PGPASSWORD'] = password
         wrds_conn = wrds.Connection(wrds_username=username)
         print("WRDS connection established")
     except Exception as e:
@@ -431,7 +441,12 @@ def cmd_portfolio(args):
     wrds_conn = None
     try:
         import wrds
+        # Set PostgreSQL env vars so wrds library doesn't prompt
         username = os.environ.get('WRDS_USERNAME', 'torrin')
+        password = os.environ.get('WRDS_PASSWORD', '')
+        os.environ['PGUSER'] = username
+        if password:
+            os.environ['PGPASSWORD'] = password
         wrds_conn = wrds.Connection(wrds_username=username)
         print("WRDS connection established")
     except Exception as e:
