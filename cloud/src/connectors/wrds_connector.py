@@ -54,25 +54,25 @@ class WRDSQueryError(WRDSError):
 # =============================================================================
 
 # Main transcript query with PERMNO linking and multi-transcript handling
+# Uses WRDS denormalized views: wrds_transcript_detail, wrds_transcript_person
 # Window function at transcript level (NOT component level) to preserve all components
 TRANSCRIPT_QUERY = """
 WITH latest_transcripts AS (
     SELECT
-        t.companyid AS firm_id,
-        c.companyname AS firm_name,
-        t.transcriptid,
-        t.mostimportantdateutc::date AS earnings_call_date,
+        td.companyid AS firm_id,
+        td.companyname AS firm_name,
+        td.transcriptid,
+        td.mostimportantdateutc::date AS earnings_call_date,
         wg.gvkey,
         ROW_NUMBER() OVER (
-            PARTITION BY t.companyid
-            ORDER BY t.mostimportantdateutc DESC, t.transcriptid DESC
+            PARTITION BY td.companyid
+            ORDER BY td.mostimportantdateutc DESC, td.transcriptid DESC
         ) AS rn
-    FROM ciq.ciqtranscript t
-    JOIN ciq.ciqcompany c ON t.companyid = c.companyid
-    LEFT JOIN ciq.wrds_gvkey wg ON t.companyid = wg.companyid
-    WHERE t.mostimportantdateutc BETWEEN %(start_date)s AND %(end_date)s
-      AND t.keydeveventtypeid = 48
-      AND (%(firm_ids)s IS NULL OR t.companyid = ANY(%(firm_ids)s))
+    FROM ciq.wrds_transcript_detail td
+    LEFT JOIN ciq.wrds_gvkey wg ON td.companyid = wg.companyid
+    WHERE td.mostimportantdateutc BETWEEN %(start_date)s AND %(end_date)s
+      AND td.keydeveventtypeid = 48
+      AND (%(firm_ids)s IS NULL OR td.companyid = ANY(%(firm_ids)s))
 ),
 selected_transcripts AS (
     SELECT * FROM latest_transcripts WHERE rn = 1
@@ -86,9 +86,11 @@ with_components AS (
         st.gvkey,
         tc.componenttext,
         tc.componentorder,
-        COALESCE(tc.speakertypename, 'Unknown') AS speakertypename
+        COALESCE(tp.speakertypename, 'Unknown') AS speakertypename
     FROM selected_transcripts st
     JOIN ciq.ciqtranscriptcomponent tc ON st.transcriptid = tc.transcriptid
+    LEFT JOIN ciq.wrds_transcript_person tp ON tc.transcriptid = tp.transcriptid
+        AND tc.transcriptcomponentid = tp.transcriptcomponentid
 ),
 with_permno AS (
     SELECT
@@ -107,9 +109,9 @@ SELECT * FROM with_permno ORDER BY firm_id, componentorder;
 
 # Query for available firm IDs (no date filter per interface spec)
 AVAILABLE_FIRMS_QUERY = """
-SELECT DISTINCT t.companyid::text AS firm_id
-FROM ciq.ciqtranscript t
-WHERE t.keydeveventtypeid = 48
+SELECT DISTINCT td.companyid::text AS firm_id
+FROM ciq.wrds_transcript_detail td
+WHERE td.keydeveventtypeid = 48
 ORDER BY firm_id;
 """
 
