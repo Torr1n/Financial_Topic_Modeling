@@ -1,0 +1,96 @@
+@startuml Step_Functions_Workflow
+!theme aws-orange
+
+skinparam backgroundColor #FEFEFE
+skinparam activityShape octagon
+
+title Step Functions: Multi-Quarter Pipeline Orchestration
+
+start
+
+:CheckvLLMHealth;
+note right
+  Lambda: Ensure ECS service
+  is running with desiredCount >= 1
+end note
+
+if (vLLM Ready?) then (yes)
+else (no)
+  :WaitForvLLM;
+  note right: Wait 120 seconds
+endif
+
+:GenerateQuarters;
+note right
+  Lambda: Convert date range
+  to list of quarters
+  e.g., ["2023Q1", "2023Q2"]
+end note
+
+:MapQuarter_1;
+note right
+  Submit firm batches for first quarter
+end note
+
+:PartitionFirms;
+note right
+  Lambda: Query WRDS (WRDSConnector)
+  Partition ~5000 firms into
+  batches of ~1000
+end note
+
+partition "ProcessFirmBatches (Nested Map)" {
+  note right
+    MaxConcurrency: 5
+    (5 parallel Batch jobs)
+  end note
+
+  :SubmitMapJob;
+  note right
+    AWS Batch submitJob.sync
+    Wait for completion
+    Retry on Spot interruption
+  end note
+
+  if (Job Succeeded?) then (yes)
+  else (no)
+    :HandleFirmError;
+    note right: Log failure, continue
+  endif
+}
+
+repeat
+  fork
+    :AggregateQuarterThemes (Quarter N);
+    note right
+      AWS Batch: Reduce job
+      - Read only topics.parquet
+      - Run cross-firm BERTopic
+      - Write themes to S3
+    end note
+  fork again
+    :MapQuarter_N+1;
+    note right
+      Begin next quarter's map:
+      - Partition firms
+      - Nested Map submits jobs
+      (skip on final quarter)
+    end note
+  end fork
+repeat while (More quarters after N+1?) is (yes)
+
+:AggregateFinalQuarterThemes;
+note right
+  Reduce last quarter
+  (not reduced inside loop)
+end note
+
+:NotifySuccess;
+note right
+  Lambda: SNS notification
+  Include quarter summaries
+end note
+
+stop
+
+@enduml

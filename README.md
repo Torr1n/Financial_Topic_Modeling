@@ -1,235 +1,266 @@
-# Capstone Deliverables: Financial Topic Modeling
+# Financial Topic Modeling Pipeline
 
-**Cloud Computing Capstone Project**
+**Identifying Cross-Firm Investment Themes from Earnings Call Transcripts**
 
-This directory contains all deliverables for the capstone project submission, demonstrating the design, implementation, and deployment of a cloud-native Financial Topic Modeling pipeline.
-
----
-
-## Project Overview
-
-**Research Question**: What universal investment themes emerge across thousands of quarterly earnings calls?
-
-**Solution**: A hierarchical NLP pipeline that:
-
-1. Ingests earnings call transcripts from 3,000+ firms
-2. Clusters sentences into firm-level topics using BERTopic
-3. Generates human-readable summaries via LLM (xAI/Grok)
-4. Aggregates topics into cross-firm themes
-5. Stores results in PostgreSQL with pgvector for semantic search
-
-**Key Learning**: Applying parallel computing principles (Amdahl's Law) to realize that a single GPU instance outperforms a distributed AWS Batch architecture for this workload, achieving 90% cost reduction with equivalent performance.
+An NLP research pipeline that discovers universal investment themes by analyzing thousands of earnings call transcripts using hierarchical topic modeling with BERTopic, GPU acceleration, and LLM-powered summarization.
 
 ---
 
-## Validated Results
+## Research Motivation
 
-| Metric              | Value            |
-| ------------------- | ---------------- |
-| Firms Processed     | 11 (MAG7 + tech) |
-| Sentences Analyzed  | ~5,000           |
-| Firm-Level Topics   | ~350             |
-| Cross-Firm Themes   | ~19              |
-| Processing Time     | ~15 minutes      |
-| Infrastructure Cost | ~$1.30           |
+Earnings calls contain rich, unstructured information about corporate strategy, market conditions, and industry trends. While individual transcripts are valuable, the real insight comes from identifying **cross-firm themes**—topics that emerge across multiple companies, revealing broader market narratives.
+
+This pipeline answers: _"What are the universal themes being discussed across all firms in a given quarter?"_
 
 ---
 
-## Deliverables Structure
+## Key Results
+
+**Validated Cloud Run (MAG7 + Tech Firms):**
+
+| Metric              | Value       |
+| ------------------- | ----------- |
+| Firms Processed     | 11          |
+| Sentences Analyzed  | ~5,000      |
+| Firm-Level Topics   | ~350        |
+| Cross-Firm Themes   | ~19         |
+| Processing Time     | ~15 minutes |
+| Infrastructure Cost | ~$1.30      |
+
+**Example Themes Discovered:**
+
+- AI infrastructure investment and GPU demand
+- Cloud migration and digital transformation
+- Supply chain optimization
+- Regulatory compliance and data privacy
+- Customer acquisition and retention strategies
+
+---
+
+## Architecture
 
 ```
-capstone_deliverables/
-├── README.md                           # This file
-├── course_documents_and_resources/     # Assignment guidelines and templates
-└── deliverables/
-    ├── system_design/                  # Architecture and ADRs
-    │   ├── architecture_diagram.md
-    │   ├── adr_001_single_gpu_vs_batch.md
-    │   ├── adr_002_postgres_vs_dynamodb.md
-    │   ├── adr_003_spot_instance_strategy.md
-    │   ├── trust_model.md
-    │   └── api_schema.md
-    ├── ethics/                         # Clause → Control → Test
-    │   ├── clause_control_test.md
-    │   ├── ethics_ledger.md
-    │   └── telemetry_matrix.md
-    ├── reliability/                    # Testing and operations
-    │   ├── test_notes.md
-    │   ├── idempotency_plan.md
-    │   ├── slo_configuration.md
-    │   └── dr_runbook.md
-    ├── cost_operability/               # Cost model and incident response
-    │   ├── cost_model.md
-    │   ├── backpressure_killswitches.md
-    │   └── incident_response.md
-    └── ai_collaboration/               # AI assistance log
-        └── ai_log.md
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        FINANCIAL TOPIC MODELING PIPELINE                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌─────────────┐    ┌──────────────────┐    ┌──────────────────────────────┐│
+│  │  Earnings   │───▶│  Sentence        │───▶│  Firm-Level Topic Modeling   ││
+│  │  Transcripts│    │  Embeddings      │    │  (BERTopic per firm)         ││
+│  │  (CSV/S3)   │    │  (all-mpnet-v2)  │    │  ~25 topics per firm         ││
+│  └─────────────┘    └──────────────────┘    └──────────────────────────────┘│
+│                                                        │                      │
+│                                                        ▼                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                     LLM Topic Summarization (xAI/Grok)                   ││
+│  │     Keywords + Sentences → "AI infrastructure investment discussion"     ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                                        │                      │
+│                                                        ▼                      │
+│  ┌──────────────────────────────────────────────────────────────────────────┐│
+│  │                    Cross-Firm Theme Aggregation                          ││
+│  │     Re-cluster ~350 topics → ~19 universal themes                        ││
+│  │     Validation: min_firms=2, max_dominance=0.4                           ││
+│  └──────────────────────────────────────────────────────────────────────────┘│
+│                                                        │                      │
+│                                                        ▼                      │
+│  ┌──────────────────────────────────────────────────────────────────────────┐│
+│  │                    PostgreSQL + pgvector Storage                          ││
+│  │     Hierarchy: Theme → Topics → Sentences → Firms                        ││
+│  │     Vector search enabled for semantic queries                           ││
+│  └──────────────────────────────────────────────────────────────────────────┘│
+│                                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Infrastructure (Simplified Cloud Architecture):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      AWS (us-east-1)                             │
+│                                                                  │
+│   ┌─────────────────┐         ┌────────────────────────────┐   │
+│   │  RDS PostgreSQL │◄────────│  EC2 g4dn.2xlarge (Spot)   │   │
+│   │  + pgvector     │         │  - Deep Learning AMI       │   │
+│   │  db.t4g.large   │         │  - GPU: NVIDIA T4          │   │
+│   │  (stoppable)    │         │  - cuML acceleration       │   │
+│   └─────────────────┘         └────────────────────────────┘   │
+│                                         │                       │
+│   ┌─────────────────┐                   │                       │
+│   │  S3 Bucket      │───────────────────┘                       │
+│   │  (code + data)  │                                           │
+│   └─────────────────┘                                           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Quick Setup
+## Quick Start
 
 ### Prerequisites
 
-- AWS CLI configured with valid credentials
-- Terraform 1.0+
-- EC2 key pair created in us-east-1
-- Python 3.10+ (for local testing)
+- Python 3.10+
+- Docker (for local PostgreSQL)
+- AWS CLI (for cloud deployment)
+- Terraform 1.0+ (for cloud deployment)
 
-### Sample Data
-
-**Download transcript data**: [Google Drive Link - [Zipped CSV](https://drive.google.com/file/d/1pndWY7ApEEXusoody2hWeCz25yCsFMMo/view?usp=sharing)]
-
-Place the CSV file in the project root:
-
-```
-Financial_Topic_Modeling/
-├── transcripts_2023-01-01_to_2023-03-31_enriched.csv
-```
-
-### Environment Setup
+### Local Development
 
 ```bash
 # Clone repository
-git clone https://github.com/Torr1n/Financial_Topic_Modeling.git
+git clone <repository-url>
 cd Financial_Topic_Modeling
 
-# Configure Terraform
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
+
+# Install dependencies
+pip install -r cloud/requirements.txt
+python -m spacy download en_core_web_sm
+
+# Start local PostgreSQL
+docker-compose up -d
+
+# Run pipeline with test firms
+DATABASE_URL="postgresql://ftm:ftm_password@localhost:5432/ftm" \
+python scripts/run_unified_pipeline_mag7.py
+```
+
+### Cloud Deployment
+
+```bash
+# 1. Configure Terraform
 cd cloud/terraform
 cp terraform.tfvars.example terraform.tfvars
-```
+# Edit terraform.tfvars with your AWS settings
 
-Edit `terraform.tfvars`:
+# 2. Deploy infrastructure
+terraform init && terraform apply
 
-```hcl
-aws_region    = "us-east-1"
-db_password   = "your-secure-password"  # Must be 8+ chars
-my_ip         = "YOUR.IP.ADDRESS/32"    # For SSH access
-key_pair_name = "your-key-pair"         # Existing EC2 key pair
-```
+# 3. Upload code to S3
+cd ../scripts && ./upload_to_s3.sh
 
-### Deploy Infrastructure
-
-```bash
-# Initialize and apply Terraform
-terraform init
-terraform plan
-terraform apply
-
-# Upload code to S3
-cd ../scripts
-./upload_to_s3.sh
-```
-
-### Smoke Test (MAG7 Validation)
-
-```bash
-# Run pipeline with 11 test firms
+# 4. Run pipeline (MAG7 validation)
 TEST_MODE=mag7 ./launch_pipeline.sh
+
+# 5. Stop RDS when done (save costs)
+./stop_rds.sh
 ```
 
-Expected output:
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed instructions.
+
+---
+
+## Project Structure
 
 ```
-Launching EC2 spot instance...
-Instance ID: i-0abc123def456
-Public IP: 54.xxx.xxx.xxx
-
-SSH: ssh -i ~/.ssh/your-key.pem ubuntu@54.xxx.xxx.xxx
-Logs: sudo tail -f /var/log/ftm-pipeline.log
+Financial_Topic_Modeling/
+├── cloud/                      # Cloud-native implementation
+│   ├── config/                 # Pipeline configuration
+│   │   └── production.yaml     # Main config file
+│   ├── src/                    # Source code
+│   │   ├── pipeline/           # Unified pipeline orchestration
+│   │   ├── topic_models/       # BERTopic implementation
+│   │   ├── database/           # PostgreSQL + pgvector models
+│   │   ├── llm/                # xAI/Grok integration
+│   │   └── connectors/         # Data source connectors
+│   ├── terraform/              # Infrastructure as code
+│   └── scripts/                # Deployment scripts
+├── scripts/                    # Pipeline entry points
+│   ├── run_unified_pipeline.py # Cloud/local runner
+│   └── run_unified_pipeline_mag7.py  # Test runner
+├── docs/                       # Documentation
+│   ├── ARCHITECTURE.md         # Technical architecture
+│   ├── DEPLOYMENT.md           # Cloud deployment guide
+│   ├── CONFIGURATION.md        # Config reference
+│   └── DEVELOPMENT.md          # Contributor guide
+├── tests/                      # Test suite
+└── legacy/                     # Legacy MVP code (reference only)
 ```
 
-### Verify Results
+---
 
-Connect to RDS via any PostgreSQL client (e.g., DBeaver):
+## Configuration
+
+All pipeline settings are in `cloud/config/production.yaml`:
+
+```yaml
+# Embedding model
+embedding:
+  model: "all-mpnet-base-v2" # or "Qwen/Qwen3-Embedding-8B" for SOTA
+  dimension: 768
+  device: "cuda"
+
+# Firm-level topic modeling (per-firm)
+firm_topic_model:
+  umap: { n_neighbors: 15, n_components: 10 }
+  hdbscan: { min_cluster_size: 6 }
+
+# Theme-level topic modeling (cross-firm)
+theme_topic_model:
+  umap: { n_neighbors: 30, n_components: 15 }
+  hdbscan: { min_cluster_size: 20 }
+
+# LLM for summarization
+llm:
+  model: "grok-4-1-fast-reasoning"
+  max_concurrent: 50
+```
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full reference.
+
+---
+
+## Data Schema
+
+**Hierarchical Output Structure:**
 
 ```
-Host: ftm-db.xxxxx.us-east-1.rds.amazonaws.com
-Port: 5432
-Database: ftm
-User: ftm
-Password: (from terraform.tfvars)
+themes (cross-firm)
+  └── topics (firm-level)
+        └── sentences (transcript)
+              └── firms (companies)
 ```
 
-Validation queries:
+**PostgreSQL Tables:**
+
+| Table       | Description          | Key Fields                            |
+| ----------- | -------------------- | ------------------------------------- |
+| `firms`     | Companies processed  | company_id, name, processed_at        |
+| `sentences` | Transcript sentences | raw_text, cleaned_text, embedding     |
+| `topics`    | Firm-level topics    | representation, summary, embedding    |
+| `themes`    | Cross-firm themes    | name, description, embedding, n_firms |
+
+**Vector Search Enabled:**
 
 ```sql
--- Check firm count
-SELECT COUNT(*) FROM firms;  -- Expected: 11
-
--- Check theme count
-SELECT COUNT(*) FROM themes;  -- Expected: ~19
-
--- Sample theme with topics
-SELECT
-  th.name AS theme,
-  th.n_firms,
-  COUNT(t.id) AS topic_count
-FROM themes th
-JOIN topics t ON t.theme_id = th.id
-GROUP BY th.id
-ORDER BY th.n_firms DESC
-LIMIT 5;
-```
-
-### Cost Management
-
-```bash
-# Stop RDS when not in use (saves ~$0.08/hr)
-./stop_rds.sh
-
-# Start RDS before next run
-./start_rds.sh
+-- Find similar topics by semantic meaning
+SELECT * FROM topics
+ORDER BY embedding <-> '[query_embedding]'
+LIMIT 10;
 ```
 
 ---
 
-## Key Evidence
+## Key Features
 
-### Architecture Decision Records
-
-| ADR                                                                 | Decision                | Rationale                                   |
-| ------------------------------------------------------------------- | ----------------------- | ------------------------------------------- |
-| [001](deliverables/system_design/adr_001_single_gpu_vs_batch.md)    | Single GPU vs AWS Batch | Amdahl's Law: sequential overhead dominates |
-| [002](deliverables/system_design/adr_002_postgres_vs_dynamodb.md)   | PostgreSQL vs DynamoDB  | Hierarchical queries, vector search         |
-| [003](deliverables/system_design/adr_003_spot_instance_strategy.md) | Spot instances          | 75% cost savings with checkpoint/resume     |
-
-### Ethics & Guardrails
-
-| Clause                | Control                       | Status   |
-| --------------------- | ----------------------------- | -------- |
-| No PII in LLM prompts | Keywords only, no raw text    | Enforced |
-| AI attribution        | `source='llm'` in database    | Enforced |
-| Equal firm treatment  | Same processing for all firms | Enforced |
-
-### Reliability
-
-| SLO             | Target                   | Actual                                |
-| --------------- | ------------------------ | ------------------------------------- |
-| Processing time | <4 hours for 3,000 firms | ~15 min for 11 firms (linear scaling) |
-| Cost per run    | <$5 (excluding LLM)      | ~$1.30                                |
-| Uptime          | N/A (batch job)          | N/A                                   |
+- **Hierarchical Topic Modeling**: Two-stage BERTopic (firm → theme)
+- **GPU Acceleration**: cuML for 10-100x faster UMAP/HDBSCAN
+- **LLM Summarization**: Human-readable topic/theme descriptions via xAI
+- **Checkpoint/Resume**: Spot instance resilience with per-firm checkpoints
+- **Vector Search**: pgvector enables semantic similarity queries
+- **Configurable**: Separate hyperparameters for firm vs theme clustering
+- **Cost-Optimized**: Spot instances + stoppable RDS = ~$1/run
 
 ---
 
-## Repository Links
+## Future Work
 
-| Resource         | Path                                                 |
-| ---------------- | ---------------------------------------------------- |
-| Main README      | [`/README.md`](../README.md)                         |
-| Architecture     | [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)   |
-| Deployment Guide | [`/docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)       |
-| Configuration    | [`/docs/CONFIGURATION.md`](../docs/CONFIGURATION.md) |
-| Terraform        | [`/cloud/terraform/`](../cloud/terraform/)           |
-| Pipeline Code    | [`/cloud/src/pipeline/`](../cloud/src/pipeline/)     |
-
----
-
-## Submission Checklist
-
-- [ ] All deliverable files created
-- [ ] Smoke test passes (MAG7)
-- [ ] Results visible in PostgreSQL
-- [ ] RDS stopped (cost savings)
-- [ ] Repository URL + commit hash submitted to Canvas
+- [ ] Sentiment analysis integration (FinBERT)
+- [ ] Event study framework for theme-based trading signals
+- [ ] Time-series theme evolution tracking
+- [ ] Interactive dashboard for theme exploration
+- [ ] WRDS direct integration for live transcript data
+- [ ] Multi-quarter longitudinal analysis

@@ -1,0 +1,96 @@
+@startuml Data_Flow
+!theme aws-orange
+
+skinparam backgroundColor #FEFEFE
+
+title Financial Topic Modeling - Data Flow
+
+' Data Sources
+database "WRDS\nCapital IQ" as wrds {
+  [ciqtranscript]
+  [ciqtranscriptcomponent]
+  [wrds_gvkey]
+}
+
+database "CRSP" as crsp {
+  [ccmxpf_linktable]
+}
+
+' Map Phase
+rectangle "Map Phase (per Batch Job)" as map {
+  component "WRDSConnector" as connector
+  component "SpaCy\nPreprocessor" as spacy
+  component "SentenceTransformer\nEmbeddings" as embedder
+  component "BERTopic\n(Firm-Level)" as bertopic_firm
+  component "vLLM\nTopic Naming" as vllm_topic
+}
+
+' Intermediate Storage
+database "S3: intermediate/" as s3_inter {
+  [firm_topics.parquet]
+  note right
+    Columns:
+    - firm_id, permno, gvkey
+    - topics[]: id, summary, keywords
+    - sentences[]: text, topic_id
+  end note
+}
+
+' Reduce Phase
+rectangle "Reduce Phase (single job)" as reduce {
+  component "Topic Loader" as loader
+  component "BERTopic\n(Theme-Level)" as bertopic_theme
+  component "vLLM\nTheme Descriptions" as vllm_theme
+  component "Theme Validator" as validator
+}
+
+' Final Storage
+database "S3: processed/" as s3_proc {
+  [firms.parquet]
+  [sentences.parquet]
+  [topics.parquet]
+  [themes.parquet]
+  [theme_contributions.parquet]
+}
+
+database "S3: sentiment-ready/" as s3_sent {
+  [themes_for_sentiment.parquet]
+  note right
+    Denormalized:
+    - theme_id, theme_name
+    - firm_id, permno, earnings_date
+    - sentences[]
+  end note
+}
+
+' Downstream
+rectangle "Downstream" as downstream {
+  component "Athena" as athena
+  component "Sentiment\nAnalysis" as sentiment
+  component "Event Study" as event
+}
+
+' Flow: Map Phase
+wrds --> connector : SQL Query
+crsp --> connector : PERMNO Linking
+connector --> spacy : TranscriptData
+spacy --> embedder : Cleaned sentences
+embedder --> bertopic_firm : Embeddings
+bertopic_firm --> vllm_topic : Topic keywords
+vllm_topic --> s3_inter : Write Parquet\n(every ~50 firms)
+
+' Flow: Reduce Phase
+s3_inter --> loader : Read all firm Parquet
+loader --> bertopic_theme : Topic summaries
+bertopic_theme --> vllm_theme : Theme keywords
+vllm_theme --> validator : Theme + descriptions
+validator --> s3_proc : Write final tables
+validator --> s3_sent : Write denormalized
+
+' Flow: Downstream
+s3_proc --> athena : Query
+athena --> sentiment : SQL Results
+s3_sent --> sentiment : Direct Parquet read
+sentiment --> event : Sentiment scores
+
+@enduml

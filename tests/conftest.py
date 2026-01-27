@@ -6,6 +6,8 @@ This module provides reusable fixtures for testing the topic modeling pipeline.
 
 import pytest
 import numpy as np
+import pandas as pd
+from datetime import date
 from typing import List, Dict, Any, Optional
 from unittest.mock import MagicMock
 import tempfile
@@ -404,3 +406,259 @@ def validate_theme_output():
         return True
 
     return _validate
+
+
+# =============================================================================
+# SpaCy Mock Fixtures (for connectors that use NLP)
+# =============================================================================
+
+
+class MockSpacyToken:
+    """Mock SpaCy token for testing NLP preprocessing."""
+
+    def __init__(self, text: str, lemma: str, is_punct: bool = False,
+                 is_space: bool = False, like_num: bool = False):
+        self.text = text
+        self.lemma_ = lemma
+        self.is_punct = is_punct
+        self.is_space = is_space
+        self.like_num = like_num
+
+
+class MockSpacySent:
+    """Mock SpaCy sentence span."""
+
+    def __init__(self, text: str):
+        self._text = text
+
+    @property
+    def text(self):
+        return self._text
+
+
+class MockSpacyDoc:
+    """
+    Mock SpaCy Doc object for testing.
+
+    Provides basic sentence splitting (on periods) and tokenization.
+    """
+
+    def __init__(self, text: str, stopwords: set = None):
+        self._text = text
+        self._stopwords = stopwords or set()
+        self._sentences = self._split_sentences(text)
+        self._tokens = self._tokenize(text)
+        self.ents = []  # No named entities in mock
+
+    def _split_sentences(self, text: str) -> list:
+        """Split text on sentence boundaries (periods followed by space or end)."""
+        import re
+        # Split on period followed by space or end of string
+        parts = re.split(r'(?<=[.!?])\s+', text.strip())
+        return [MockSpacySent(p.strip()) for p in parts if p.strip()]
+
+    def _tokenize(self, text: str) -> list:
+        """Simple tokenization by splitting on whitespace and punctuation."""
+        import re
+        # Split into words, keeping track of punctuation
+        tokens = []
+        for word in text.split():
+            # Remove leading/trailing punctuation
+            clean_word = word.strip('.,!?;:()[]{}"\'-')
+            if clean_word:
+                is_num = clean_word.replace('.', '').replace(',', '').isdigit()
+                tokens.append(MockSpacyToken(
+                    text=clean_word,
+                    lemma=clean_word.lower(),  # Simple lowercase as lemma
+                    is_punct=False,
+                    is_space=False,
+                    like_num=is_num,
+                ))
+            # Add punctuation as separate token if present
+            trailing = word[len(word.rstrip('.,!?;:()[]{}"\'-')):]
+            if trailing:
+                tokens.append(MockSpacyToken(
+                    text=trailing,
+                    lemma=trailing,
+                    is_punct=True,
+                    is_space=False,
+                    like_num=False,
+                ))
+        return tokens
+
+    @property
+    def sents(self):
+        """Return sentence spans."""
+        return self._sentences
+
+    def __iter__(self):
+        """Iterate over tokens."""
+        return iter(self._tokens)
+
+    def __len__(self):
+        return len(self._tokens)
+
+
+class MockSpacyDefaults:
+    """Mock SpaCy Defaults class with stop words."""
+    stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been",
+                  "being", "have", "has", "had", "do", "does", "did", "will",
+                  "would", "could", "should", "may", "might", "must", "shall",
+                  "can", "need", "dare", "ought", "used", "to", "of", "in",
+                  "for", "on", "with", "at", "by", "from", "as", "into", "about",
+                  "like", "through", "over", "after", "between", "out", "against",
+                  "during", "without", "before", "under", "around", "among",
+                  "i", "you", "he", "she", "it", "we", "they", "me", "him",
+                  "her", "us", "them", "my", "your", "his", "its", "our", "their",
+                  "this", "that", "these", "those", "and", "but", "or", "not",
+                  "what", "which", "who", "whom", "where", "when", "why", "how"}
+
+
+class MockSpacyModel:
+    """
+    Mock SpaCy model for testing.
+
+    Provides basic NLP capabilities without downloading actual models.
+    Used in unit tests to avoid network dependencies.
+    """
+
+    Defaults = MockSpacyDefaults
+
+    def __init__(self, model_name: str = "en_core_web_sm"):
+        self.model_name = model_name
+        self._stopwords = self.Defaults.stop_words.copy()
+
+    def __call__(self, text: str) -> MockSpacyDoc:
+        """Process text and return a mock Doc."""
+        return MockSpacyDoc(text, self._stopwords)
+
+
+@pytest.fixture
+def mock_spacy_model():
+    """Return a MockSpacyModel instance."""
+    return MockSpacyModel()
+
+
+@pytest.fixture(autouse=True)
+def patch_spacy_load(monkeypatch):
+    """
+    Patch spacy.load globally to avoid model downloads.
+
+    Applied autouse so ALL tests use the mock by default, preventing
+    external model downloads in network-restricted environments.
+    """
+    def mock_load(model_name: str, **kwargs):
+        return MockSpacyModel(model_name)
+
+    monkeypatch.setattr("spacy.load", mock_load)
+    return mock_load
+
+
+# =============================================================================
+# WRDS Mock Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_wrds_dataframe():
+    """
+    Mock WRDS DataFrame response for unit tests.
+
+    Contains sample transcript data with PERMNO linking.
+    """
+    return pd.DataFrame({
+        "firm_id": ["374372246", "374372246", "374372246", "24937", "24937"],
+        "firm_name": [
+            "Lamb Weston Holdings, Inc.", "Lamb Weston Holdings, Inc.",
+            "Lamb Weston Holdings, Inc.", "Apple Inc.", "Apple Inc."
+        ],
+        "transcript_id": ["123456", "123456", "123456", "789012", "789012"],
+        "earnings_call_date": [
+            date(2023, 1, 5), date(2023, 1, 5), date(2023, 1, 5),
+            date(2023, 1, 10), date(2023, 1, 10)
+        ],
+        "componenttext": [
+            "Good morning everyone. Welcome to the earnings call.",
+            "Q1 was strong. Revenue exceeded expectations.",
+            "We are investing in AI and machine learning capabilities.",
+            "Good afternoon. This is Tim speaking.",
+            "iPhone sales were excellent. Services revenue grew significantly."
+        ],
+        "componentorder": [1, 2, 3, 1, 2],
+        "speakertypename": ["Operator", "CEO", "CEO", "Operator", "CEO"],
+        "gvkey": ["123456", "123456", "123456", "001690", "001690"],
+        "permno": [16431, 16431, 16431, 14593, 14593],
+        "link_date": [
+            date(2022, 1, 1), date(2022, 1, 1), date(2022, 1, 1),
+            date(1980, 12, 12), date(1980, 12, 12)
+        ],
+    })
+
+
+@pytest.fixture
+def mock_wrds_dataframe_unlinked():
+    """
+    Mock WRDS DataFrame with a firm that has no PERMNO.
+
+    Used to test that unlinked firms are skipped.
+    """
+    return pd.DataFrame({
+        "firm_id": ["999999", "999999", "24937", "24937"],
+        "firm_name": [
+            "Unlinked Corp.", "Unlinked Corp.",
+            "Apple Inc.", "Apple Inc."
+        ],
+        "transcript_id": ["555555", "555555", "789012", "789012"],
+        "earnings_call_date": [
+            date(2023, 1, 15), date(2023, 1, 15),
+            date(2023, 1, 10), date(2023, 1, 10)
+        ],
+        "componenttext": [
+            "This is an unlinked firm. No PERMNO available.",
+            "Second component for unlinked firm.",
+            "Good afternoon. This is Tim speaking.",
+            "iPhone sales were excellent."
+        ],
+        "componentorder": [1, 2, 1, 2],
+        "speakertypename": ["CEO", "CEO", "Operator", "CEO"],
+        "gvkey": [None, None, "001690", "001690"],
+        "permno": [None, None, 14593, 14593],
+        "link_date": [None, None, date(1980, 12, 12), date(1980, 12, 12)],
+    })
+
+
+@pytest.fixture
+def mock_wrds_dataframe_multi_transcript():
+    """
+    Mock WRDS DataFrame with multiple transcripts per firm.
+
+    Used to test that only the latest transcript is selected.
+    """
+    return pd.DataFrame({
+        "firm_id": [
+            "24937", "24937", "24937", "24937",  # Apple - older transcript
+            "24937", "24937",  # Apple - newer transcript (should be selected)
+        ],
+        "firm_name": [
+            "Apple Inc.", "Apple Inc.", "Apple Inc.", "Apple Inc.",
+            "Apple Inc.", "Apple Inc."
+        ],
+        "transcript_id": [
+            "789010", "789010", "789010", "789010",  # Older
+            "789012", "789012",  # Newer
+        ],
+        "earnings_call_date": [
+            date(2023, 1, 5), date(2023, 1, 5), date(2023, 1, 5), date(2023, 1, 5),
+            date(2023, 1, 20), date(2023, 1, 20),
+        ],
+        "componenttext": [
+            "Old transcript sentence 1.", "Old transcript sentence 2.",
+            "Old transcript sentence 3.", "Old transcript sentence 4.",
+            "New transcript sentence A.", "New transcript sentence B.",
+        ],
+        "componentorder": [1, 2, 3, 4, 1, 2],
+        "speakertypename": ["CEO", "CEO", "CFO", "CFO", "CEO", "CFO"],
+        "gvkey": ["001690"] * 6,
+        "permno": [14593] * 6,
+        "link_date": [date(1980, 12, 12)] * 6,
+    })

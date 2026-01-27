@@ -1,0 +1,95 @@
+@startuml Financial_Topic_Modeling_Production_Architecture
+!theme aws-orange
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+skinparam defaultFontName Arial
+
+title Financial Topic Modeling - Production Architecture
+
+' External
+actor "User / Scheduler" as user
+database "WRDS" as wrds
+
+' Orchestration Layer
+rectangle "Orchestration" as orchestration {
+    component "Step Functions\nState Machine" as sfn
+    component "Lambda:\ngenerate_quarters" as lambda_q
+    component "Lambda:\npartition_firms" as lambda_f
+}
+
+' Compute Layer
+rectangle "Compute (AWS Batch)" as compute {
+    component "Job Queue\n(Spot Priority)" as queue
+
+    rectangle "Batch Jobs" as jobs {
+        component "Map Job 0\n(~1000 firms)" as job0
+        component "Map Job 1\n(~1000 firms)" as job1
+        component "Map Job N\n(~1000 firms)" as jobn
+    }
+
+    component "Reduce Job\n(Theme Aggregation)" as reduce
+}
+
+' Inference Layer
+rectangle "Inference (ECS)" as inference {
+    component "vLLM Service\nQwen3-8B\nPort 8000" as vllm
+    component "ALB" as alb
+}
+
+' Storage Layer
+rectangle "Storage (S3)" as storage {
+    database "intermediate/\nfirm-topics/" as s3_inter
+    database "processed/\nthemes, topics,\nsentences" as s3_proc
+    database "sentiment-ready/" as s3_sent
+}
+
+' Analytics
+rectangle "Analytics" as analytics {
+    component "Athena" as athena
+    component "Glue Catalog" as glue
+}
+
+' Downstream
+rectangle "Downstream" as downstream {
+    component "Sentiment\nAnalysis" as sentiment
+}
+
+' Connections
+user --> sfn : StartExecution\n{start_date, end_date}
+
+sfn --> lambda_q : 1. Generate quarters
+sfn --> lambda_f : 2. Partition firms
+lambda_f --> wrds : Query firm list
+
+sfn --> queue : 3. Submit Map Jobs
+queue --> job0
+queue --> job1
+queue --> jobn
+
+job0 --> wrds : Fetch transcripts
+job1 --> wrds
+jobn --> wrds
+
+job0 --> alb : LLM requests
+job1 --> alb
+jobn --> alb
+alb --> vllm
+
+job0 --> s3_inter : Write Parquet\n(chunks)
+job1 --> s3_inter
+jobn --> s3_inter
+
+sfn --> reduce : 4. Submit Reduce
+reduce --> s3_inter : Read firm topics
+reduce --> alb : Theme descriptions
+reduce --> s3_proc : Write themes
+
+s3_proc --> glue : Schema
+glue --> athena
+athena --> sentiment : Query themes
+s3_sent --> sentiment : Direct read
+
+sfn --> user : 5. Notify complete
+
+@enduml
