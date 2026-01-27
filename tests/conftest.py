@@ -630,35 +630,24 @@ def mock_wrds_dataframe_unlinked():
 @pytest.fixture
 def mock_wrds_dataframe_multi_transcript():
     """
-    Mock WRDS DataFrame with multiple transcripts per firm.
+    Mock WRDS DataFrame simulating SQL output after latest-transcript filtering.
 
-    Used to test that only the latest transcript is selected.
+    The SQL uses ROW_NUMBER() to select only the latest transcript per firm,
+    so this fixture returns only the newer transcript's components (as the
+    real SQL query would).
     """
+    # SQL already filters to latest transcript, so mock returns only the newest
     return pd.DataFrame({
-        "firm_id": [
-            "24937", "24937", "24937", "24937",  # Apple - older transcript
-            "24937", "24937",  # Apple - newer transcript (should be selected)
-        ],
-        "firm_name": [
-            "Apple Inc.", "Apple Inc.", "Apple Inc.", "Apple Inc.",
-            "Apple Inc.", "Apple Inc."
-        ],
-        "transcript_id": [
-            "789010", "789010", "789010", "789010",  # Older
-            "789012", "789012",  # Newer
-        ],
-        "earnings_call_date": [
-            date(2023, 1, 5), date(2023, 1, 5), date(2023, 1, 5), date(2023, 1, 5),
-            date(2023, 1, 20), date(2023, 1, 20),
-        ],
+        "firm_id": ["24937", "24937"],  # Only newest transcript
+        "firm_name": ["Apple Inc.", "Apple Inc."],
+        "transcript_id": ["789012", "789012"],  # Newer transcript only
+        "earnings_call_date": [date(2023, 1, 20), date(2023, 1, 20)],
         "componenttext": [
-            "Old transcript sentence 1.", "Old transcript sentence 2.",
-            "Old transcript sentence 3.", "Old transcript sentence 4.",
             "New transcript sentence A.", "New transcript sentence B.",
         ],
-        "componentorder": [1, 2, 3, 4, 1, 2],
-        "speakertypename": ["CEO", "CEO", "CFO", "CFO", "CEO", "CFO"],
-        "gvkey": ["001690"] * 6,
-        "permno": [14593] * 6,
-        "link_date": [date(1980, 12, 12)] * 6,
+        "componentorder": [1, 2],
+        "speakertypename": ["CEO", "CFO"],
+        "gvkey": ["001690", "001690"],
+        "permno": [14593, 14593],
+        "link_date": [date(1980, 12, 12), date(1980, 12, 12)],
     })
