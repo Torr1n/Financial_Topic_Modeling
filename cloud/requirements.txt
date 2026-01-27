@@ -19,6 +19,9 @@ pyyaml>=6.0
 # AWS (Phase 2+)
 boto3>=1.28.0
 
+# WRDS Data Access (for PERMNO lookup and earnings dates)
+wrds>=3.1.0
+
 # Database (Phase 1 - Architecture Pivot)
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
@@ -26,6 +29,9 @@ pgvector>=0.2.0
 
 # LLM Integration (Phase 3)
 openai>=1.0.0
+google-langextract>=0.1.0
+google-api-python-client>=2.88.0
+google-auth-httplib2>=0.1.0
 
 # Testing
 pytest>=7.4.0

@@ -4,19 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Financial Topic Modeling research project that builds an NLP pipeline for identifying cross-firm investment themes from earnings call transcripts. The project has two phases:
+This is a Financial Topic Modeling research project that builds an NLP pipeline for identifying cross-firm investment themes from earnings call transcripts. The project has three main components:
 
-1. **Local_BERTopic_MVP**: A proof-of-concept implementation (legacy code - poorly structured, use for reference only)
-2. **Cloud Migration** (in development): Scalable AWS infrastructure using map-reduce pattern
+1. **cloud/**: Production topic modeling pipeline (AWS-ready)
+2. **downstream/**: Sentiment analysis, event studies, and portfolio sorts
+3. **legacy/**: Old MVP code (reference only)
 
 ## Architecture
 
 The pipeline follows a hierarchical approach:
 
-1. **Data Ingestion**: Load earnings call transcripts from WRDS, local CSV, or cloud storage (S3/Athena)
+1. **Data Ingestion**: Load earnings call transcripts from WRDS, local CSV, or cloud storage
 2. **Firm-Level Topic Modeling**: Per-firm BERTopic clustering of sentences into topics
 3. **Cross-Firm Theme Identification**: Re-cluster firm topics to discover universal themes
-4. **Downstream Analysis**: Sentiment analysis (FinBERT) and event studies (future work)
+4. **Export**: Bridge script adds PERMNO identifiers from WRDS
+5. **Downstream Analysis**: FinBERT sentiment, event study regressions, portfolio sorts
 
 Key architectural patterns:
 - **Map phase**: Independent firm-level processing (parallelizable via AWS Batch)
@@ -29,14 +31,19 @@ Key architectural patterns:
 # Activate virtual environment
 source venv/bin/activate
 
-# Run the main pipeline (from Local_BERTopic_MVP directory)
-python run_pipeline.py
+# Run cloud pipeline
+python -m cloud.src.pipeline.unified_pipeline --config cloud/config/production.yaml
 
-# Run pipeline programmatically
-python -c "from src.main import CrossFirmThemePipeline; p = CrossFirmThemePipeline('src/config/config.yaml')"
+# Export themes for downstream
+python -m cloud.src.export.export_for_downstream \
+    --db-url postgresql://user:pass@host/db \
+    --output downstream/data/themes.json
 
-# Run with specific firms (from Local_BERTopic_MVP)
-python -m src.main --config src/config/config.yaml --firms "Tesla, Inc." --start-date 2024-10-01 --end-date 2024-12-01 --output-dir output
+# Run downstream analysis (all stages)
+cd downstream && python cli.py --themes data/themes.json --output results/
+
+# Run downstream (sentiment only - no WRDS needed)
+cd downstream && python cli.py --themes data/themes.json --stages sentiment
 ```
 
 ## Key Configuration

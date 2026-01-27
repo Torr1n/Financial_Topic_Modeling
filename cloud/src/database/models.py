@@ -59,6 +59,7 @@ class Firm(Base):
         ticker: Stock ticker symbol (optional)
         name: Company display name
         quarter: Processing period (e.g., "2023Q1")
+        earnings_call_date: Date of earnings call (for event study linkage)
         processed_at: Timestamp when firm was processed (null = pending)
     """
 
@@ -69,6 +70,7 @@ class Firm(Base):
     ticker: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     quarter: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    earnings_call_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships
@@ -113,6 +115,9 @@ class Sentence(Base):
     # Relationships
     firm: Mapped["Firm"] = relationship(back_populates="sentences")
     topic: Mapped[Optional["Topic"]] = relationship(back_populates="sentences")
+    entities: Mapped[List["ExtractedEntity"]] = relationship(
+        back_populates="sentence", lazy="selectin", cascade="all, delete-orphan"
+    )
 
     # B-tree indexes for FK columns (defined via mapped_column index=True above)
 
@@ -183,6 +188,31 @@ class Theme(Base):
 
     # Relationships
     topics: Mapped[List["Topic"]] = relationship(back_populates="theme", lazy="selectin")
+
+
+class ExtractedEntity(Base):
+    """
+    Structured data entity extracted from a sentence by an LLM.
+
+    Attributes:
+        id: Primary key
+        sentence_id: FK to sentences table
+        entity_type: Type of entity (e.g., "PERSON", "COMPANY", "METRIC")
+        value: The extracted text value
+        confidence: Confidence score from the extraction model (optional)
+    """
+    __tablename__ = "extracted_entities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sentence_id: Mapped[int] = mapped_column(
+        ForeignKey("sentences.id"), nullable=False, index=True
+    )
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[Optional[float]] = mapped_column(nullable=True)
+
+    # Relationship
+    sentence: Mapped["Sentence"] = relationship(back_populates="entities")
 
 
 # =============================================================================

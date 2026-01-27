@@ -1,0 +1,6 @@
+permno,edate,sentiment,theme_id,theme_name,firm_name
+14593,01/15/2023,0.5000,theme_001,Technology Innovation,Apple Inc
+10107,01/20/2023,0.7500,theme_001,Technology Innovation,Microsoft Corporation
+47896,01/18/2023,-0.2500,theme_002,Financial Performance,JPMorgan Chase
+93436,01/22/2023,0.1250,theme_001,Technology Innovation,Nvidia Corporation
+86868,01/25/2023,-0.3750,theme_002,Financial Performance,Goldman Sachs
