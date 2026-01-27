@@ -1,6 +1,9 @@
 # Claude Code
 .claude/
 
+# Agent OS (local project installation)
+agent-os/
+
 # IDE
 .idea/
 

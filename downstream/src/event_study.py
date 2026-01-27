@@ -1,281 +1,420 @@
-import wrds
+"""
+Thematic Event Study Orchestration Module.
+
+This module provides the ThematicES class, which orchestrates the complete workflow
+for running event studies on thematic sentiment data. It serves as the coordination
+layer between WRDS data acquisition and the core CAR/BHAR computation engine.
+
+Architecture Overview
+---------------------
+The downstream event study functionality is split across two modules:
+
+1. **This module (event_study.py)**: ThematicES class
+   - Orchestrates the full event study workflow
+   - Pulls fundamental data from WRDS (Compustat, CRSP, IBES)
+   - Computes financial covariates (ROA, leverage, market-to-book, etc.)
+   - Prepares data for regression analysis
+   - Delegates CAR/BHAR computation to EventStudy class
+
+2. **event_study_module.py**: EventStudy class
+   - Core computational engine for abnormal returns
+   - Implements multiple risk models (market-adjusted, market, FF3, FF4)
+   - Handles estimation windows and event windows
+   - Pure statistical computation, no orchestration
+
+Typical Usage
+-------------
+For thematic event studies with sentiment data::
+
+    from src.event_study import ThematicES
+    from src.wrds_connection import WRDSConnection
+
+    events = [
+        {"permno": 10002, "edate": "05/29/2012", "sentiment": 1},
+        {"permno": 14593, "edate": "06/15/2012", "sentiment": -1},
+    ]
+
+    with WRDSConnection() as conn:
+        study = ThematicES(events, wrds_connection=conn)
+        results = study.doAll()  # Returns DataFrame ready for regression
+
+WRDS Data Queries
+-----------------
+ThematicES pulls data from the following WRDS databases:
+
+- **Compustat (comp_na_daily_all.fundq, funda)**: Quarterly and annual fundamentals
+- **CRSP (crsp_a_stock.msf)**: Monthly stock prices and returns
+- **IBES (tr_ibes.statsum_epsus)**: Analyst earnings estimates
+- **Link Tables (crsp.ccmxpf_linktable, wrdsapps_link_crsp_ibes)**: PERMNO-GVKEY-Ticker mapping
+
+Computed Covariates
+-------------------
+The calculateFactors() method computes these regression covariates:
+
+- Return_on_Assets: net_income_q / total_assets_q
+- Book_Leverage: (debt + current_liabilities) / total_capital
+- Capital_Expenditures: capex_q / total_assets_q
+- Research_and_Development: R&D expense / total_assets_q
+- Sales_Growth: current_sale / lagged_sale
+- Firm_Size: log(sale)
+- Cash: cash_and_short_term_investments / total_assets_q
+- Asset_Tangibility: PPE / total_assets_q
+- Market_to_Book: enterprise_value / total_assets_q
+- Earnings_Surprise: (actual - median_estimate) * price
+- Stock_Volatility: sqrt(rolling 12-month sum of squared returns)
+- Stock_Return: 3-month buy-and-hold return
+- Delta_Employee_Change: (employees - lagged_employees) / total_assets_q
+
+See Also
+--------
+- event_study_module.EventStudy: Core CAR/BHAR calculation engine
+- wrds_connection.WRDSConnection: Context manager for WRDS connections
+- portfolio_sorts.PortfolioSorts: Post-event portfolio return analysis
+"""
 import pandas as pd
-import math
-from event_study_module import EventStudy
 import os
 from pathlib import Path
 import numpy as np
-import statsmodels.api as sm
+
+from src.wrds_connection import WRDSConnection
+from src.event_study_module import EventStudy
+
 
 class ThematicES:
+    """
+    Orchestrates thematic event studies by pulling WRDS data and computing CAR.
 
-     #Initialize with dictionary attribute. Dictionary must have three dimensions: permno, edate, and sentiment. e.g.:
-     # events = [{"permno":10002,"edate":"05/29/2012","sentiment": 1},
-     #       {"permno":82504,"edate":"05/29/2012","sentiment": 2},
-     #       {"permno":89350,"edate":"01/04/2010","sentiment": 3},
-     #       {"permno":14593, "edate":"01/04/2022","sentiment": 4}]
+    This class handles the full workflow of:
+    1. Pulling fundamental and market data from WRDS
+    2. Computing financial factors and covariates
+    3. Computing CAR/BHAR using the EventStudy engine
 
-     def __init__(self, dictionary, wrds_connection=None):
-          self.dictionary = dictionary
-          self.WRDSQuery = None
-          self.CRSPQuery = None
-          self.Factors = None
-          self.Results = None
-          self.wrds_connection = wrds_connection
-          self.owns_connection = False  # Track if we created the connection
+    Args:
+        dictionary: List of event dictionaries with keys: permno, edate, sentiment.
+            Example: [{"permno": 10002, "edate": "05/29/2012", "sentiment": 1}, ...]
+        wrds_connection: Optional existing WRDS connection. If provided, the
+            connection will be reused and NOT closed by this class.
+    """
 
-     def wrdsPull(self):
-          #Extract permnos from dictionary
-          permnos = [event["permno"] for event in self.dictionary]
+    def __init__(self, dictionary, wrds_connection=None):
+        """
+        Initialize the thematic event study.
 
-          #Convert to list for sql querying
-          permno_str = ",".join(str(p) for p in permnos)
+        Args:
+            dictionary: List of event dictionaries with permno, edate, sentiment.
+            wrds_connection: Optional existing WRDS connection to reuse.
+        """
+        self.dictionary = dictionary
+        self.WRDSQuery = None
+        self.CRSPQuery = None
+        self.Factors = None
+        self.Results = None
+        self.wrds_connection = wrds_connection
 
-          # Use existing connection or create new one
-          if self.wrds_connection is not None:
-               conn = self.wrds_connection
-          else:
-               conn = wrds.Connection()
-               self.owns_connection = True  # We created it, so we'll close it
+    def wrdsPull(self):
+        """
+        Pull fundamental and market data from WRDS for all events.
 
-          #Extract WRDS data using SQL query for each permno
-          self.WRDSQuery = conn.raw_sql(f"""WITH funda AS (
-          SELECT
-               gvkey,
-               datadate,
-               SALE,
-               EMP AS employees,
-               datafmt,
-               consol,
-               indfmt
-          FROM comp_na_daily_all.funda
-          WHERE datafmt = 'STD'
-               AND consol  = 'C'
-          ),
-          compustat_na AS (
-          SELECT DISTINCT
-               fq.gvkey,
-               fq.datadate,
-               fq.fyearq,
-               fq.fqtr,
-               fq.fyr,
-               fq.tic,
-               fq.EPSFXQ AS eps_q,
-               fq.IBQ AS net_income_q,
-               fq.ATQ AS total_assets_q,
-               fq.DLTTQ AS total_debt_q,
-               fq.LCTQ AS current_liabilities_total_q,
-               fq.TEQQ AS shareholders_equity_q,
-               fq.CAPXY AS capex_q,
-               fl.SALE,
-               fq.CHEQ AS cash_and_short_term_investments_q,
-               fq.PPENTQ AS ppe_q,
-               fl.employees,
-               fq.XRDQ AS research_and_development_expense_q
-          FROM comp_na_daily_all.fundq AS fq
-          LEFT JOIN funda fl
-               ON fq.gvkey = fl.gvkey
-               AND fq.datadate = fl.datadate
-               AND fq.datafmt = fl.datafmt
-               AND fq.consol = fl.consol
-               AND fq.indfmt = fl.indfmt
-               WHERE fq.datafmt = 'STD'
-               AND fq.consol = 'C'
-          ),
-          ibes_ranked AS (
-          SELECT
-               i.ticker,
-               i.fpedats,
-               i.statpers,
-               i.numest,
-               i.meanest,
-               i.medest,
-               i.measure,
-               i.actual,
-               ROW_NUMBER() OVER (
-               PARTITION BY i.ticker, i.fpedats
-               ORDER BY i.statpers DESC
-               ) AS rn
-               FROM tr_ibes.statsum_epsus AS i
-               WHERE i.measure = 'EPS'
-               AND i.fiscalp = 'QTR'
-          ),
-          ibes_latest AS (
-          SELECT 
-               *
-          FROM ibes_ranked
-          WHERE rn = 1
-          ),
-          final_joined AS (
-          SELECT DISTINCT
-               s.permno,
-               s.ticker,
-               s.comnam,
-               c.*,
-               ib.measure,
-               ib.fpedats,
-               ib.meanest,
-               ib.medest,
-               ib.actual
-          FROM compustat_na c
-          JOIN crsp.ccmxpf_linktable l
-               ON c.gvkey = l.gvkey
-               AND c.datadate BETWEEN l.linkdt AND COALESCE(l.linkenddt, '9999-12-31')
-          JOIN crsp.stocknames s
-               ON s.permno = l.lpermno
-               AND c.datadate BETWEEN s.namedt AND COALESCE(s.nameenddt, '9999-12-31')
-          LEFT JOIN wrdsapps_link_crsp_ibes.ibcrsphist ib_ln
-               ON s.permno = ib_ln.permno
-               AND c.datadate BETWEEN ib_ln.sdate AND COALESCE(ib_ln.edate, '9999-12-31')
-          LEFT JOIN ibes_latest ib
-          ON ib_ln.ticker   = ib.ticker
-          AND c.datadate = ib.fpedats
-          AND ib.measure = 'EPS'
-          WHERE l.lpermno IN ({permno_str})
-               AND l.linktype IN ('LU', 'LC')
-               AND l.linkprim IN ('P', 'C')
-          )
+        Uses WRDSConnection context manager to properly manage connection lifecycle.
+        If an external connection was provided, it will be reused and not closed.
+        """
+        # Extract permnos from dictionary
+        permnos = [event["permno"] for event in self.dictionary]
 
-          SELECT *
-          FROM final_joined;
+        # Convert to list for sql querying
+        permno_str = ",".join(str(p) for p in permnos)
 
-          """)
+        # Use context manager for connection management
+        with WRDSConnection(connection=self.wrds_connection) as conn:
+            # Extract WRDS data using SQL query for each permno
+            self.WRDSQuery = conn.raw_sql(f"""WITH funda AS (
+            SELECT
+                 gvkey,
+                 datadate,
+                 SALE,
+                 EMP AS employees,
+                 datafmt,
+                 consol,
+                 indfmt
+            FROM comp_na_daily_all.funda
+            WHERE datafmt = 'STD'
+                 AND consol  = 'C'
+            ),
+            compustat_na AS (
+            SELECT DISTINCT
+                 fq.gvkey,
+                 fq.datadate,
+                 fq.fyearq,
+                 fq.fqtr,
+                 fq.fyr,
+                 fq.tic,
+                 fq.EPSFXQ AS eps_q,
+                 fq.IBQ AS net_income_q,
+                 fq.ATQ AS total_assets_q,
+                 fq.DLTTQ AS total_debt_q,
+                 fq.LCTQ AS current_liabilities_total_q,
+                 fq.TEQQ AS shareholders_equity_q,
+                 fq.CAPXY AS capex_q,
+                 fl.SALE,
+                 fq.CHEQ AS cash_and_short_term_investments_q,
+                 fq.PPENTQ AS ppe_q,
+                 fl.employees,
+                 fq.XRDQ AS research_and_development_expense_q
+            FROM comp_na_daily_all.fundq AS fq
+            LEFT JOIN funda fl
+                 ON fq.gvkey = fl.gvkey
+                 AND fq.datadate = fl.datadate
+                 AND fq.datafmt = fl.datafmt
+                 AND fq.consol = fl.consol
+                 AND fq.indfmt = fl.indfmt
+                 WHERE fq.datafmt = 'STD'
+                 AND fq.consol = 'C'
+            ),
+            ibes_ranked AS (
+            SELECT
+                 i.ticker,
+                 i.fpedats,
+                 i.statpers,
+                 i.numest,
+                 i.meanest,
+                 i.medest,
+                 i.measure,
+                 i.actual,
+                 ROW_NUMBER() OVER (
+                 PARTITION BY i.ticker, i.fpedats
+                 ORDER BY i.statpers DESC
+                 ) AS rn
+                 FROM tr_ibes.statsum_epsus AS i
+                 WHERE i.measure = 'EPS'
+                 AND i.fiscalp = 'QTR'
+            ),
+            ibes_latest AS (
+            SELECT
+                 *
+            FROM ibes_ranked
+            WHERE rn = 1
+            ),
+            final_joined AS (
+            SELECT DISTINCT
+                 s.permno,
+                 s.ticker,
+                 s.comnam,
+                 c.*,
+                 ib.measure,
+                 ib.fpedats,
+                 ib.meanest,
+                 ib.medest,
+                 ib.actual
+            FROM compustat_na c
+            JOIN crsp.ccmxpf_linktable l
+                 ON c.gvkey = l.gvkey
+                 AND c.datadate BETWEEN l.linkdt AND COALESCE(l.linkenddt, '9999-12-31')
+            JOIN crsp.stocknames s
+                 ON s.permno = l.lpermno
+                 AND c.datadate BETWEEN s.namedt AND COALESCE(s.nameenddt, '9999-12-31')
+            LEFT JOIN wrdsapps_link_crsp_ibes.ibcrsphist ib_ln
+                 ON s.permno = ib_ln.permno
+                 AND c.datadate BETWEEN ib_ln.sdate AND COALESCE(ib_ln.edate, '9999-12-31')
+            LEFT JOIN ibes_latest ib
+            ON ib_ln.ticker   = ib.ticker
+            AND c.datadate = ib.fpedats
+            AND ib.measure = 'EPS'
+            WHERE l.lpermno IN ({permno_str})
+                 AND l.linktype IN ('LU', 'LC')
+                 AND l.linkprim IN ('P', 'C')
+            )
 
-          self.CRSPQuery = conn.raw_sql(f"""
-          SELECT
-               *
-          FROM crsp_a_stock.msf
-          WHERE msf.permno IN ({permno_str})""")
+            SELECT *
+            FROM final_joined;
 
-          #Preliminary calculations before merging
-          self.CRSPQuery["prc"] = self.CRSPQuery["prc"].abs()
-          self.CRSPQuery["cap"] = self.CRSPQuery["prc"] * self.CRSPQuery["shrout"]
-          self.CRSPQuery["ret_sqd"] = self.CRSPQuery["ret"]**2
-          self.CRSPQuery["gross_ret"] = self.CRSPQuery["ret"]+1
-          #Compute stock volatility using sqrt(cumulative sum of 12 months of squared returns) and stock return (buy and hold return, or cumulative product of last 3 months gross returns-1)
-          self.CRSPQuery = self.CRSPQuery.sort_values(["permno", "date"])
-          self.CRSPQuery["Stock_Volatility"] = np.sqrt(self.CRSPQuery.groupby(['permno','cusip'])["ret_sqd"].transform(lambda s: s.rolling(window=12, min_periods = 12).sum()))
-          self.CRSPQuery["Stock_Return"] = self.CRSPQuery.groupby(['permno','cusip'])["gross_ret"].transform(lambda s: s.rolling(window=3, min_periods = 3).apply(np.prod, raw=True))-1
+            """)
 
-          #Prepare factors table and CAR table for merging
-          self.WRDSQuery['datadate'] = pd.to_datetime(self.WRDSQuery['datadate'], format='%Y-%m-%d')
-          self.CRSPQuery['date'] = pd.to_datetime(self.CRSPQuery['date'], format='%Y-%m-%d')
+            self.CRSPQuery = conn.raw_sql(f"""
+            SELECT
+                 *
+            FROM crsp_a_stock.msf
+            WHERE msf.permno IN ({permno_str})""")
 
-          #Sort dates in both tables for merging
-          self.WRDSQuery = self.WRDSQuery.sort_values(['datadate'])
-          self.CRSPQuery = self.CRSPQuery.sort_values(['date'])
+        # Preliminary calculations before merging (outside context manager)
+        self.CRSPQuery["prc"] = self.CRSPQuery["prc"].abs()
+        self.CRSPQuery["cap"] = self.CRSPQuery["prc"] * self.CRSPQuery["shrout"]
+        self.CRSPQuery["ret_sqd"] = self.CRSPQuery["ret"]**2
+        self.CRSPQuery["gross_ret"] = self.CRSPQuery["ret"]+1
 
-          #Merge CRSPQuery and WRDSQuery tables using fuzzy merge (backwards date match, give or take 31 days of tolerance). This is because CRSP is using month-end data, which may or may not correspond with the date of fiscal quarter-ends. 31 days is a large tolerance, however, and could lead to issues with dated return data
-          self.Factors = pd.merge_asof(
-          self.WRDSQuery,
-          self.CRSPQuery,
-          by="permno",                         # exact match on permno
-          left_on="datadate",
-          right_on="date",
-          direction="backward",                  # nearest date, not strictly backwards
-          tolerance=pd.Timedelta("31D")          # allow up to 4-day difference
-          )
-          
-          #Close the connection
-          # Only close if we created the connection
-          if self.owns_connection:
-               conn.close()
-               self.owns_connection = False
+        # Compute stock volatility using sqrt(cumulative sum of 12 months of squared returns)
+        # and stock return (buy and hold return, or cumulative product of last 3 months gross returns-1)
+        self.CRSPQuery = self.CRSPQuery.sort_values(["permno", "date"])
+        self.CRSPQuery["Stock_Volatility"] = np.sqrt(
+            self.CRSPQuery.groupby(['permno', 'cusip'])["ret_sqd"].transform(
+                lambda s: s.rolling(window=12, min_periods=12).sum()
+            )
+        )
+        self.CRSPQuery["Stock_Return"] = self.CRSPQuery.groupby(['permno', 'cusip'])["gross_ret"].transform(
+            lambda s: s.rolling(window=3, min_periods=3).apply(np.prod, raw=True)
+        ) - 1
 
-     def calculateFactors(self):
-     
-          # Ensure correct sort for forward-fill
-          self.Factors = self.Factors.sort_values(['permno', 'ticker', 'datadate'])
+        # Prepare factors table and CAR table for merging
+        self.WRDSQuery['datadate'] = pd.to_datetime(self.WRDSQuery['datadate'], format='%Y-%m-%d')
+        self.CRSPQuery['date'] = pd.to_datetime(self.CRSPQuery['date'], format='%Y-%m-%d')
 
-          # Forward-fill annual figures within each (permno, ticker), with a limit of 3 consecutive NAs (only ffill relevant annual results)
-          self.Factors['sale'] = self.Factors.groupby(['permno', 'ticker'], sort=False)['sale'].ffill(limit = 3)
-          self.Factors['employees'] = self.Factors.groupby(['permno', 'ticker'], sort=False)['employees'].ffill(limit = 3)
+        # Sort dates in both tables for merging
+        self.WRDSQuery = self.WRDSQuery.sort_values(['datadate'])
+        self.CRSPQuery = self.CRSPQuery.sort_values(['date'])
 
-          self.Factors = self.Factors.sort_values(['permno','ticker','fyearq','fqtr'])
+        # Merge CRSPQuery and WRDSQuery tables using fuzzy merge
+        # (backwards date match, give or take 31 days of tolerance)
+        # This is because CRSP is using month-end data, which may or may not
+        # correspond with the date of fiscal quarter-ends
+        self.Factors = pd.merge_asof(
+            self.WRDSQuery,
+            self.CRSPQuery,
+            by="permno",
+            left_on="datadate",
+            right_on="date",
+            direction="backward",
+            tolerance=pd.Timedelta("31D")
+        )
 
-          #Lag columns
-          self.Factors['sale_lagged'] = self.Factors.groupby(['permno','ticker','fqtr'])['sale'].shift(1)
-          self.Factors['employees_lagged'] = self.Factors.groupby(['permno','ticker','fqtr'])['employees'].shift(1)
+    def calculateFactors(self):
+        """Calculate financial factors from the pulled WRDS data."""
+        # Ensure correct sort for forward-fill
+        self.Factors = self.Factors.sort_values(['permno', 'ticker', 'datadate'])
 
-          #Compute factors from Labor-Shortage Exposure Paper
-          self.Factors['Return_on_Assets'] = self.Factors['net_income_q'] / self.Factors['total_assets_q']
-          self.Factors['Book_Leverage'] = (self.Factors['total_debt_q'] + self.Factors['current_liabilities_total_q']) / (self.Factors['total_debt_q'] + self.Factors['current_liabilities_total_q']+self.Factors['shareholders_equity_q'])
-          self.Factors['Capital_Expenditures'] = self.Factors['capex_q'] / self.Factors['total_assets_q']
-          self.Factors['Research_and_Development'] = self.Factors['research_and_development_expense_q'] / self.Factors['total_assets_q']
-          self.Factors['Sales_Growth'] = self.Factors['sale'] / self.Factors['sale_lagged']
-          
-          # Handle log transformation safely - replace zero/negative/missing sales with NaN
-          # Use pandas method to handle NaN values properly
-          self.Factors['Firm_Size'] = self.Factors['sale'].apply(
-              lambda x: np.log(x) if pd.notna(x) and x > 0 else np.nan
-          )
-          
-          self.Factors['Cash'] = self.Factors['cash_and_short_term_investments_q'] / self.Factors['total_assets_q']
-          self.Factors['Asset_Tangibility'] = self.Factors['ppe_q'] / self.Factors['total_assets_q']
+        # Forward-fill annual figures within each (permno, ticker),
+        # with a limit of 3 consecutive NAs (only ffill relevant annual results)
+        self.Factors['sale'] = self.Factors.groupby(
+            ['permno', 'ticker'], sort=False
+        )['sale'].ffill(limit=3)
+        self.Factors['employees'] = self.Factors.groupby(
+            ['permno', 'ticker'], sort=False
+        )['employees'].ffill(limit=3)
 
-          #Market value of assets is calculated as market cap + total debt - cash (Enterprise Value)
-          self.Factors['Market_to_Book'] = (self.Factors['cap']+self.Factors['total_debt_q']-self.Factors['cash_and_short_term_investments_q'])/self.Factors['total_assets_q']
-          self.Factors['Earnings_Surprise'] = (self.Factors['actual'] - self.Factors['medest'])*self.Factors['prc']
+        self.Factors = self.Factors.sort_values(['permno', 'ticker', 'fyearq', 'fqtr'])
 
-          #Should this be Δ(employees) / total assets OR Δ(employees/total assets)? For now, implementing former
-          self.Factors['Delta_Employee_Change'] = (self.Factors['employees'] - self.Factors['employees_lagged']) / self.Factors['total_assets_q']
+        # Lag columns
+        self.Factors['sale_lagged'] = self.Factors.groupby(
+            ['permno', 'ticker', 'fqtr']
+        )['sale'].shift(1)
+        self.Factors['employees_lagged'] = self.Factors.groupby(
+            ['permno', 'ticker', 'fqtr']
+        )['employees'].shift(1)
 
-          #To do: Stock return, MTB, Stock volatility, earnings surprise
+        # Compute factors from Labor-Shortage Exposure Paper
+        self.Factors['Return_on_Assets'] = (
+            self.Factors['net_income_q'] / self.Factors['total_assets_q']
+        )
+        self.Factors['Book_Leverage'] = (
+            (self.Factors['total_debt_q'] + self.Factors['current_liabilities_total_q']) /
+            (self.Factors['total_debt_q'] + self.Factors['current_liabilities_total_q'] +
+             self.Factors['shareholders_equity_q'])
+        )
+        self.Factors['Capital_Expenditures'] = (
+            self.Factors['capex_q'] / self.Factors['total_assets_q']
+        )
+        self.Factors['Research_and_Development'] = (
+            self.Factors['research_and_development_expense_q'] / self.Factors['total_assets_q']
+        )
+        self.Factors['Sales_Growth'] = self.Factors['sale'] / self.Factors['sale_lagged']
 
-     def calculateCovariatesAndCAR(self):
-          """
-          Calculate covariates and CAR for all events.
-          Returns a DataFrame with all covariates, CAR, and sentiment ready for regression.
-          Does NOT run regression - that should be done at the pipeline level for per-theme analysis.
-          """
+        # Handle log transformation safely - replace zero/negative/missing sales with NaN
+        self.Factors['Firm_Size'] = self.Factors['sale'].apply(
+            lambda x: np.log(x) if pd.notna(x) and x > 0 else np.nan
+        )
 
-          #Initialize event study class with shared connection
-          eventstudy = EventStudy(
-               output_path=os.path.join(Path.home()),
-               wrds_connection=self.wrds_connection
-          )
+        self.Factors['Cash'] = (
+            self.Factors['cash_and_short_term_investments_q'] / self.Factors['total_assets_q']
+        )
+        self.Factors['Asset_Tangibility'] = (
+            self.Factors['ppe_q'] / self.Factors['total_assets_q']
+        )
 
-          #Reformat dictionary data for event study
-          events = [{"permno": e["permno"], "edate": e["edate"]} for e in self.dictionary]
+        # Market value of assets is calculated as market cap + total debt - cash (Enterprise Value)
+        self.Factors['Market_to_Book'] = (
+            (self.Factors['cap'] + self.Factors['total_debt_q'] -
+             self.Factors['cash_and_short_term_investments_q']) / self.Factors['total_assets_q']
+        )
+        self.Factors['Earnings_Surprise'] = (
+            (self.Factors['actual'] - self.Factors['medest']) * self.Factors['prc']
+        )
 
-          #Run event study
-          result = eventstudy.eventstudy(data=events, model='madj', output='df')
+        # Delta(employees) / total assets
+        self.Factors['Delta_Employee_Change'] = (
+            (self.Factors['employees'] - self.Factors['employees_lagged']) /
+            self.Factors['total_assets_q']
+        )
 
-          #Keep df that fits format for analysis
-          car = result.get("event_date")
+    def calculateCovariatesAndCAR(self):
+        """
+        Calculate covariates and CAR for all events.
 
-          #Prepare factors table and CAR table for merging
-          self.Factors['datadate'] = pd.to_datetime(self.Factors['datadate'], format='%Y-%m-%d')
-          car['edate'] = pd.to_datetime(car['edate'], format='%Y-%m-%d')
+        Returns:
+            DataFrame with all covariates, CAR, and sentiment ready for regression.
+            Does NOT run regression - that should be done at the pipeline level.
+        """
+        # Initialize event study class with shared connection
+        eventstudy = EventStudy(
+            output_path=os.path.join(Path.home()),
+            wrds_connection=self.wrds_connection
+        )
 
-          #Sort dates in both tables for merging
-          self.Factors = self.Factors.sort_values(['datadate'])
-          car = car.sort_values(['edate'])
+        # Reformat dictionary data for event study
+        events = [{"permno": e["permno"], "edate": e["edate"]} for e in self.dictionary]
 
-          self.Results = pd.merge_asof(car, self.Factors, left_on = 'edate', right_on ='datadate', by = 'permno', direction = 'backward', allow_exact_matches= False)
+        # Run event study
+        result = eventstudy.eventstudy(data=events, model='madj', output='df')
 
-          self.Results = self.Results[['permno', 'edate', 'datadate', 'ticker', 'comnam', 'Return_on_Assets', 'Book_Leverage', 'Capital_Expenditures', 'Research_and_Development', 'Sales_Growth', 'Firm_Size', 'Cash', 'Asset_Tangibility', 'Delta_Employee_Change','Stock_Volatility','Stock_Return','Market_to_Book', 'Earnings_Surprise','cret', 'car', 'bhar']]
+        # Keep df that fits format for analysis
+        car = result.get("event_date")
 
-          #Drop rows / events with NA values
-          self.Results = self.Results.dropna()
+        # Prepare factors table and CAR table for merging
+        self.Factors['datadate'] = pd.to_datetime(self.Factors['datadate'], format='%Y-%m-%d')
+        car['edate'] = pd.to_datetime(car['edate'], format='%Y-%m-%d')
 
-          # Also drop rows with infinite values in any column
-          self.Results = self.Results.replace([np.inf, -np.inf], np.nan).dropna()
+        # Sort dates in both tables for merging
+        self.Factors = self.Factors.sort_values(['datadate'])
+        car = car.sort_values(['edate'])
 
-          #Convert dictionary to table and adjust edate type to allow for merging
-          dictionary_table = pd.DataFrame(self.dictionary)
-          dictionary_table["edate"] = pd.to_datetime(dictionary_table["edate"])
+        self.Results = pd.merge_asof(
+            car, self.Factors,
+            left_on='edate', right_on='datadate',
+            by='permno',
+            direction='backward',
+            allow_exact_matches=False
+        )
 
-          self.Results = self.Results.merge(dictionary_table, on=["permno", "edate"], how="left")
+        self.Results = self.Results[[
+            'permno', 'edate', 'datadate', 'ticker', 'comnam',
+            'Return_on_Assets', 'Book_Leverage', 'Capital_Expenditures',
+            'Research_and_Development', 'Sales_Growth', 'Firm_Size', 'Cash',
+            'Asset_Tangibility', 'Delta_Employee_Change', 'Stock_Volatility',
+            'Stock_Return', 'Market_to_Book', 'Earnings_Surprise',
+            'cret', 'car', 'bhar'
+        ]]
 
-          # Return results DataFrame (regression will be done at pipeline level)
-          return self.Results
+        # Drop rows / events with NA values
+        self.Results = self.Results.dropna()
 
-     def doAll(self):
-          """
-          Run complete event study analysis: pull WRDS data, calculate factors, and compute CAR.
-          Returns DataFrame with all covariates, CAR, and sentiment ready for regression.
-          """
-          self.wrdsPull()
-          self.calculateFactors()
-          return self.calculateCovariatesAndCAR()
+        # Also drop rows with infinite values in any column
+        self.Results = self.Results.replace([np.inf, -np.inf], np.nan).dropna()
+
+        # Convert dictionary to table and adjust edate type to allow for merging
+        dictionary_table = pd.DataFrame(self.dictionary)
+        dictionary_table["edate"] = pd.to_datetime(dictionary_table["edate"])
+
+        self.Results = self.Results.merge(dictionary_table, on=["permno", "edate"], how="left")
+
+        # Return results DataFrame (regression will be done at pipeline level)
+        return self.Results
+
+    def doAll(self):
+        """
+        Run complete event study analysis.
+
+        Executes: pull WRDS data -> calculate factors -> compute CAR.
+
+        Returns:
+            DataFrame with all covariates, CAR, and sentiment ready for regression.
+        """
+        self.wrdsPull()
+        self.calculateFactors()
+        return self.calculateCovariatesAndCAR()

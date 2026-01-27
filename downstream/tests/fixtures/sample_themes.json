@@ -1,0 +1,49 @@
+{
+  "themes": [
+    {
+      "theme_id": "theme_001",
+      "theme_name": "Technology Innovation",
+      "firm_contributions": [
+        {
+          "firm_id": "AAPL",
+          "firm_name": "Apple Inc",
+          "permno": 14593,
+          "cluster_id": 1,
+          "earnings_call_date": "2023-01-15",
+          "sentences": [
+            {"text": "We are excited about our new product innovations", "speaker": "CEO"},
+            {"text": "Revenue growth exceeded expectations", "speaker": "CFO"}
+          ]
+        },
+        {
+          "firm_id": "MSFT",
+          "firm_name": "Microsoft Corporation",
+          "permno": 10107,
+          "cluster_id": 1,
+          "earnings_call_date": "2023-01-20",
+          "sentences": [
+            {"text": "Cloud services continue to show strong momentum", "speaker": "CEO"},
+            {"text": "Operating margins improved significantly", "speaker": "CFO"}
+          ]
+        }
+      ]
+    },
+    {
+      "theme_id": "theme_002",
+      "theme_name": "Financial Performance",
+      "firm_contributions": [
+        {
+          "firm_id": "JPM",
+          "firm_name": "JPMorgan Chase",
+          "permno": 47896,
+          "cluster_id": 2,
+          "earnings_call_date": "2023-01-18",
+          "sentences": [
+            {"text": "Net interest income was lower than anticipated", "speaker": "CEO"},
+            {"text": "Credit costs increased due to macroeconomic concerns", "speaker": "CFO"}
+          ]
+        }
+      ]
+    }
+  ]
+}
