@@ -13,7 +13,10 @@ Design:
     - Filter Operator speaker type and single-word sentences
 """
 
+import json
 import logging
+import os
+import stat
 from datetime import datetime
 from typing import List, Optional, Set
 
@@ -194,9 +197,100 @@ class WRDSConnector(DataConnector):
         """Close connection on context exit."""
         self.close()
 
+    def _setup_wrds_auth(self) -> Optional[str]:
+        """
+        Setup non-interactive WRDS authentication.
+
+        Priority order:
+        1. Check for existing .pgpass file with correct permissions
+        2. Create .pgpass from environment variables (WRDS_USERNAME, WRDS_PASSWORD)
+        3. Attempt AWS Secrets Manager (if boto3 available)
+
+        Returns:
+            WRDS username if found, None to trigger interactive prompt
+        """
+        # Check if .pgpass already exists with correct permissions
+        pgpass_default = os.path.expanduser("~/.pgpass")
+        if os.path.exists(pgpass_default):
+            # Verify it has WRDS entry and correct permissions
+            try:
+                file_stat = os.stat(pgpass_default)
+                if file_stat.st_mode & 0o077 == 0:  # Only owner can read/write
+                    with open(pgpass_default, "r") as f:
+                        if "wrds-pgdata.wharton.upenn.edu" in f.read():
+                            logger.info("Found existing .pgpass file with WRDS entry")
+                            # Return username from env if available, else None
+                            return os.environ.get("WRDS_USERNAME")
+            except Exception as e:
+                logger.debug(f"Could not read .pgpass: {e}")
+
+        # Try environment variables
+        username = os.environ.get("WRDS_USERNAME")
+        password = os.environ.get("WRDS_PASSWORD")
+
+        if username and password:
+            # Create .pgpass file
+            pgpass_content = f"wrds-pgdata.wharton.upenn.edu:9737:wrds:{username}:{password}\n"
+
+            # Use /tmp for AWS Lambda/Batch, otherwise home directory
+            if os.access("/tmp", os.W_OK):
+                pgpass_path = "/tmp/.pgpass"
+            else:
+                pgpass_path = pgpass_default
+
+            try:
+                with open(pgpass_path, "w") as f:
+                    f.write(pgpass_content)
+
+                # Set permissions to 0600 (required by PostgreSQL)
+                os.chmod(pgpass_path, stat.S_IRUSR | stat.S_IWUSR)
+
+                # Tell PostgreSQL where to find it
+                os.environ["PGPASSFILE"] = pgpass_path
+
+                logger.info(f"Created .pgpass file at {pgpass_path}")
+                return username
+            except Exception as e:
+                logger.warning(f"Failed to create .pgpass: {e}")
+
+        # Try AWS Secrets Manager (if in AWS environment)
+        try:
+            import boto3
+
+            client = boto3.client("secretsmanager")
+            response = client.get_secret_value(SecretId="wrds-credentials")
+            credentials = json.loads(response["SecretString"])
+
+            username = credentials["username"]
+            password = credentials["password"]
+
+            pgpass_path = "/tmp/.pgpass"
+            pgpass_content = f"wrds-pgdata.wharton.upenn.edu:9737:wrds:{username}:{password}\n"
+
+            with open(pgpass_path, "w") as f:
+                f.write(pgpass_content)
+
+            os.chmod(pgpass_path, stat.S_IRUSR | stat.S_IWUSR)
+            os.environ["PGPASSFILE"] = pgpass_path
+
+            logger.info("Created .pgpass from AWS Secrets Manager")
+            return username
+        except Exception as e:
+            logger.debug(f"AWS Secrets Manager not available: {e}")
+
+        # Fall back to interactive
+        logger.warning("No WRDS credentials found - will prompt interactively")
+        return None
+
     def _get_connection(self):
         """
         Get or create WRDS connection.
+
+        Authentication priority:
+        1. Existing .pgpass file
+        2. WRDS_USERNAME + WRDS_PASSWORD environment variables
+        3. AWS Secrets Manager (wrds-credentials secret)
+        4. Interactive prompt (fallback)
 
         Returns:
             Active WRDS connection
@@ -216,7 +310,15 @@ class WRDSConnector(DataConnector):
             )
 
         try:
-            self._conn = wrds.Connection()
+            # Setup authentication
+            username = self._setup_wrds_auth()
+
+            # Connect (pass username if available to avoid username prompt)
+            if username:
+                self._conn = wrds.Connection(wrds_username=username)
+            else:
+                self._conn = wrds.Connection()
+
             logger.info("Connected to WRDS database")
             return self._conn
         except Exception as e:

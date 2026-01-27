@@ -81,6 +81,8 @@ class TestWRDSIntegration:
     def test_date_range_filtering(self):
         """Verify date range is respected."""
         from cloud.src.connectors.wrds_connector import WRDSConnector
+        from datetime import date
+        import pandas as pd
 
         with WRDSConnector() as connector:
             # Fetch with narrow date range
@@ -94,6 +96,11 @@ class TestWRDSIntegration:
             for firm_id, firm_data in result.firms.items():
                 ec_date = firm_data.metadata.get("earnings_call_date")
                 assert ec_date is not None
+                # Handle both date objects and strings/Timestamps from pandas
+                if isinstance(ec_date, str):
+                    ec_date = pd.to_datetime(ec_date).date()
+                elif hasattr(ec_date, 'date'):  # Timestamp
+                    ec_date = ec_date.date()
                 # Date should be in January 2023
                 assert ec_date.year == 2023
                 assert ec_date.month == 1
