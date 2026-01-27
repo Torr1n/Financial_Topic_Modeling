@@ -46,6 +46,7 @@ try:
     from cuml.cluster import HDBSCAN as cuHDBSCAN
     from cuml.manifold import UMAP as cuUMAP
     from cuml.preprocessing import normalize as cu_normalize
+
     _CUML_AVAILABLE = True
     logger.info("cuML available - GPU acceleration enabled for UMAP/HDBSCAN")
 except ImportError:
@@ -201,7 +202,9 @@ class BERTopicModel(TopicModel):
                 verbose=False,
             )
 
-            logger.info(f"Initialized BERTopic model ({'GPU' if use_gpu else 'CPU'} acceleration)")
+            logger.info(
+                f"Initialized BERTopic model ({'GPU' if use_gpu else 'CPU'} acceleration)"
+            )
 
     def _create_cpu_models(self):
         """Create CPU-based UMAP and HDBSCAN models."""
@@ -219,7 +222,9 @@ class BERTopicModel(TopicModel):
             min_cluster_size=hdbscan_config["min_cluster_size"],
             min_samples=hdbscan_config["min_samples"],
             metric=hdbscan_config["metric"],
-            cluster_selection_method=hdbscan_config.get("cluster_selection_method", "leaf"),
+            cluster_selection_method=hdbscan_config.get(
+                "cluster_selection_method", "leaf"
+            ),
         )
 
         return umap_model, hdbscan_model
@@ -246,7 +251,9 @@ class BERTopicModel(TopicModel):
             min_cluster_size=hdbscan_config["min_cluster_size"],
             min_samples=hdbscan_config["min_samples"],
             metric=hdbscan_config.get("metric", "euclidean"),
-            cluster_selection_method=hdbscan_config.get("cluster_selection_method", "leaf"),
+            cluster_selection_method=hdbscan_config.get(
+                "cluster_selection_method", "leaf"
+            ),
             gen_min_span_tree=True,
             prediction_data=True,
         )
@@ -373,15 +380,35 @@ class BERTopicModel(TopicModel):
             )
 
         # Fit and transform with pre-computed embeddings
-        topics, probs = self._bertopic_model.fit_transform(
-            documents,
-            embeddings=self._embeddings,
-        )
+        try:
+            topics, probs = self._bertopic_model.fit_transform(
+                documents,
+                embeddings=self._embeddings,
+            )
+        except ValueError as e:
+            if "max_df corresponds to < documents than min_df" in str(e):
+                # Edge case: too few topics for configured min_df, retry with min_df=1
+                logger.warning(
+                    "min_df too high for document count, retrying with min_df=1"
+                )
+                self._bertopic_model.vectorizer_model = CountVectorizer(
+                    ngram_range=tuple(
+                        self.config.get("vectorizer", {}).get("ngram_range", [1, 2])
+                    ),
+                    min_df=1,
+                )
+                topics, probs = self._bertopic_model.fit_transform(
+                    documents,
+                    embeddings=self._embeddings,
+                )
+            else:
+                raise
 
-        # Reduce outliers with pre-computed embeddings
-        topics = self._bertopic_model.reduce_outliers(
-            documents, topics, strategy="embeddings", embeddings=self._embeddings
-        )
+        # Reduce outliers with pre-computed embeddings (only if outliers AND valid topics exist)
+        if -1 in topics and any(t >= 0 for t in topics):
+            topics = self._bertopic_model.reduce_outliers(
+                documents, topics, strategy="embeddings", embeddings=self._embeddings
+            )
 
         # Extract topic info
         topic_info = self._bertopic_model.get_topic_info()
@@ -411,23 +438,20 @@ class BERTopicModel(TopicModel):
 
         logger.info(f"Discovered {n_topics} topics")
 
-        # Compute full topic distribution using approximate_distribution
-        # This gives us (n_docs, n_topics) matrix needed for sentence ordering
-        logger.info("Computing full topic distribution...")
-        topic_distr, _ = self._bertopic_model.approximate_distribution(
-            documents,
-            use_embedding_model=True,
-        )
-
-        # Normalize to get probabilities (rows sum to 1)
-        row_sums = topic_distr.sum(axis=1, keepdims=True)
-        # Avoid division by zero
-        row_sums = np.where(row_sums == 0, 1, row_sums)
-        probabilities = topic_distr / row_sums
-
-        # Guard: approximate_distribution can return all-zero rows when
-        # clustering produces no assignment; ensure valid distributions
+        # Compute full topic distribution (only if topics exist)
         if n_topics > 0:
+            logger.info("Computing full topic distribution...")
+            topic_distr, _ = self._bertopic_model.approximate_distribution(
+                documents,
+                use_embedding_model=True,
+            )
+
+            # Normalize to get probabilities (rows sum to 1)
+            row_sums = topic_distr.sum(axis=1, keepdims=True)
+            row_sums = np.where(row_sums == 0, 1, row_sums)
+            probabilities = topic_distr / row_sums
+
+            # Replace zero-probability rows with uniform distribution
             zero_rows = np.where(probabilities.sum(axis=1) == 0)[0]
             if len(zero_rows) > 0:
                 logger.debug(
@@ -435,6 +459,10 @@ class BERTopicModel(TopicModel):
                     len(zero_rows),
                 )
                 probabilities[zero_rows] = 1.0 / n_topics
+        else:
+            # Edge case: all sentences are outliers, no topics discovered
+            logger.warning("No topics discovered - all sentences are outliers")
+            probabilities = np.zeros((len(documents), 0))
 
         logger.info(f"Topic distribution shape: {probabilities.shape}")
 

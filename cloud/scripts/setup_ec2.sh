@@ -67,6 +67,18 @@ echo "=== Installing dependencies ==="
 # Avoid filling the small root volume on fresh instances
 $PIP_CMD install --no-cache-dir -r cloud/requirements.txt
 $PYTHON_CMD -m spacy download en_core_web_sm
+
+# Install cuML for GPU-accelerated UMAP/HDBSCAN (10-100x speedup)
+echo "=== Installing cuML for GPU acceleration ==="
+# cuML brings its own CUDA libraries which can conflict with pre-installed PyTorch.
+# Solution: Install cuML first, then reinstall PyTorch to use cuML's CUDA libs.
+if $PIP_CMD install --no-cache-dir cuml-cu12 --extra-index-url https://pypi.nvidia.com; then
+    echo "cuML installed, reinstalling PyTorch for CUDA compatibility..."
+    $PIP_CMD install --no-cache-dir torch torchvision --force-reinstall --index-url https://download.pytorch.org/whl/cu121
+else
+    echo "cuML install failed, will use CPU fallback"
+fi
+
 # Clean up caches to reclaim space
 rm -rf ~/.cache/pip || true
 sudo apt-get clean || true
@@ -91,6 +103,9 @@ PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -U ftm -d ftm -c "CREATE EXTENS
 # Run the unified pipeline
 echo "=== Starting Pipeline $(date) ==="
 echo "GPU available: $($PYTHON_CMD -c 'import torch; print(torch.cuda.is_available())')"
+echo "cuML available: $($PYTHON_CMD -c 'try:
+    from cuml import __version__; print(f"yes (v{__version__})")
+except: print("no (CPU fallback)")')"
 
 # Use the general pipeline runner
 $PYTHON_CMD scripts/run_unified_pipeline.py

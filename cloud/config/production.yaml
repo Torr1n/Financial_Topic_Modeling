@@ -18,14 +18,15 @@ embedding:
   # Model name from sentence-transformers or HuggingFace
   # Options:
   #   - "all-mpnet-base-v2" (768 dim, fast, good quality)
+  #   - "Qwen/Qwen3-Embedding-0.6B" (1024 dim, happy medium quality)
   #   - "Alibaba-NLP/gte-Qwen2-1.5B-instruct" (1536 dim, better quality)
   #   - "Qwen/Qwen3-Embedding-8B" (4096 dim, SOTA quality, requires GPU)
-  model: "all-mpnet-base-v2"
-  dimension: 768
+  model: "Qwen/Qwen3-Embedding-0.6B"
+  dimension: 1024 # Embedding dimension (must match model)
 
   # Device: "cuda" for GPU, "cpu" for CPU
   # IMPORTANT: Use "cuda" for cloud deployment (10x faster)
-  device: "cpu"
+  device: "cuda"
 
 # =============================================================================
 # FIRM-LEVEL TOPIC MODEL (BERTopic)
