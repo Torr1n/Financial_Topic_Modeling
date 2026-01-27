@@ -1,6 +1,7 @@
 # Ignore results (generated output)
 results/
 !results/.gitkeep
+sentiment_analysis_output/
 
 # Keep example run for documentation
 !results/example_run/
