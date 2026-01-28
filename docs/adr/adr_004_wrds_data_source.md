@@ -41,11 +41,16 @@ Without PERMNO at ingestion time, a separate mapping step is required between to
 ### Key Tables
 | Table | Library | Purpose |
 |-------|---------|---------|
-| `ciqtranscript` | `ciq` | Master transcript metadata |
-| `ciqtranscriptcomponent` | `ciq` | Transcript text segments |
-| `ciqcompany` | `ciq` | Company names |
+| `wrds_transcript_detail` | `ciq` | Denormalized transcript metadata (companyid, date, etc.) |
+| `ciqtranscriptcomponent` | `ciq` | Transcript text segments (full componenttext) |
+| `wrds_transcript_person` | `ciq` | Speaker info (speakertypename) |
 | `wrds_gvkey` | `ciq` | Capital IQ → Compustat GVKEY |
 | `ccmxpf_linktable` | `crsp` | Compustat GVKEY → CRSP PERMNO |
+
+**Note**: The implementation uses WRDS denormalized views (`wrds_transcript_detail`, `wrds_transcript_person`) rather than raw Capital IQ tables (`ciqtranscript`, `ciqcompany`) because:
+1. Raw tables lack direct `companyid` column in `ciqtranscript`
+2. Denormalized views provide `companyid`, `companyname`, and `mostimportantdateutc` in one place
+3. Speaker type requires joining through `wrds_transcript_person` (not direct column)
 
 ### Linking Strategy
 ```
@@ -103,10 +108,36 @@ class WRDSConnector(DataConnector):
 - **Schema coupling**: If WRDS changes table structure, connector needs updates
 
 ### Mitigations
-- **Credentials**: Use environment variables (`WRDS_USERNAME`, `WRDS_PASSWORD`)
-- **Caching**: Cache GVKEY→PERMNO linkage table at start of pipeline run
+- **Credentials**: Auto-configured via `_setup_wrds_auth()` (see Credential Management below)
+- **Caching**: PERMNO linking done in SQL (single query, no separate cache needed)
 - **Unlinked firms**: **SKIP entirely** (see decision note below)
 - **Testing**: Mock WRDS responses for unit tests; use integration tests sparingly
+
+### Credential Management
+
+The connector automatically configures WRDS credentials with the following priority:
+
+1. **Existing `.pgpass` file**: If `~/.pgpass` exists with WRDS entry and correct permissions (0600)
+2. **Environment variables**: `WRDS_USERNAME` + `WRDS_PASSWORD` → auto-creates `.pgpass`
+3. **AWS Secrets Manager**: Secret named `wrds-credentials` with JSON `{"username":"xxx","password":"xxx"}`
+4. **Interactive prompt**: Fallback if no credentials found
+
+**Why auto-create `.pgpass`?** The WRDS Python library (`wrds.Connection()`) does NOT recognize `WRDS_USERNAME`/`WRDS_PASSWORD` environment variables directly. It only recognizes:
+- PostgreSQL standard env vars (`PGUSER`, `PGPASSWORD`) - security risk
+- The `.pgpass` file with strict 0600 permissions
+- The `wrds_username` constructor parameter (for username only)
+
+**AWS Batch/Lambda**: The connector writes to `/tmp/.pgpass` when `/tmp` is writable (common in AWS) and sets `PGPASSFILE` env var, enabling non-interactive auth in ephemeral environments. If `/tmp` is not writable, it falls back to `~/.pgpass`.
+
+```python
+# Implementation in _setup_wrds_auth()
+if username and password:
+    pgpass_path = "/tmp/.pgpass" if os.access("/tmp", os.W_OK) else "~/.pgpass"
+    with open(pgpass_path, "w") as f:
+        f.write(f"wrds-pgdata.wharton.upenn.edu:9737:wrds:{username}:{password}\n")
+    os.chmod(pgpass_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    os.environ["PGPASSFILE"] = pgpass_path
+```
 
 ### Decision Note: Skip Unlinked Firms
 
@@ -168,39 +199,63 @@ class WRDSConnector(DataConnector):
 
 ### SQL Query Template
 ```sql
-WITH transcript_data AS (
+-- Uses WRDS denormalized views for transcript metadata
+-- Window function selects latest transcript per firm per date range
+WITH latest_transcripts AS (
     SELECT
-        t.companyid AS firm_id,
-        c.companyname AS firm_name,
-        t.transcriptid,
-        t.mostimportantdateutc::date AS earnings_call_date,
+        td.companyid AS firm_id,
+        td.companyname AS firm_name,
+        td.transcriptid,
+        td.mostimportantdateutc::date AS earnings_call_date,
+        wg.gvkey,
+        ROW_NUMBER() OVER (
+            PARTITION BY td.companyid
+            ORDER BY td.mostimportantdateutc DESC, td.transcriptid DESC
+        ) AS rn
+    FROM ciq.wrds_transcript_detail td
+    LEFT JOIN ciq.wrds_gvkey wg ON td.companyid = wg.companyid
+    WHERE td.mostimportantdateutc BETWEEN %(start_date)s AND %(end_date)s
+      AND td.keydeveventtypeid = 48  -- Earnings calls only
+      AND (%(firm_ids)s IS NULL OR td.companyid = ANY(%(firm_ids)s))
+),
+selected_transcripts AS (
+    SELECT * FROM latest_transcripts WHERE rn = 1
+),
+with_components AS (
+    SELECT
+        st.firm_id::text AS firm_id,
+        st.firm_name,
+        st.transcriptid::text AS transcript_id,
+        st.earnings_call_date,
+        st.gvkey,
         tc.componenttext,
         tc.componentorder,
-        tc.speakertypename AS speaker_type
-    FROM ciq.ciqtranscript t
-    JOIN ciq.ciqcompany c ON t.companyid = c.companyid
-    JOIN ciq.ciqtranscriptcomponent tc ON t.transcriptid = tc.transcriptid
-    WHERE t.mostimportantdateutc BETWEEN %(start_date)s AND %(end_date)s
+        COALESCE(tp.speakertypename, 'Unknown') AS speakertypename
+    FROM selected_transcripts st
+    JOIN ciq.ciqtranscriptcomponent tc ON st.transcriptid = tc.transcriptid
+    LEFT JOIN ciq.wrds_transcript_person tp ON tc.transcriptid = tp.transcriptid
+        AND tc.transcriptcomponentid = tp.transcriptcomponentid
 ),
-gvkey_link AS (
-    SELECT td.*, wg.gvkey
-    FROM transcript_data td
-    LEFT JOIN ciq.wrds_gvkey wg ON td.firm_id = wg.companyid
-),
-permno_link AS (
-    SELECT g.*,
-           ccm.lpermno AS permno,
-           ccm.linkdt AS link_date
-    FROM gvkey_link g
-    LEFT JOIN crsp.ccmxpf_linktable ccm ON g.gvkey = ccm.gvkey
+with_permno AS (
+    SELECT
+        wc.*,
+        ccm.lpermno AS permno,
+        ccm.linkdt AS link_date
+    FROM with_components wc
+    LEFT JOIN crsp.ccmxpf_linktable ccm ON wc.gvkey = ccm.gvkey
         AND ccm.linktype IN ('LU', 'LC')
         AND ccm.linkprim IN ('P', 'C')
-        AND g.earnings_call_date >= ccm.linkdt
-        AND g.earnings_call_date <= COALESCE(ccm.linkenddt, '9999-12-31')
+        AND wc.earnings_call_date >= ccm.linkdt
+        AND wc.earnings_call_date <= COALESCE(ccm.linkenddt, '9999-12-31')
 )
-SELECT * FROM permno_link
-ORDER BY firm_id, transcriptid, componentorder;
+SELECT * FROM with_permno ORDER BY firm_id, componentorder;
 ```
+
+### Multi-Transcript Rule
+When a firm has multiple transcripts in the date range, only the **latest** is selected:
+- `ROW_NUMBER()` partitioned by `companyid`, ordered by date DESC
+- Tie-break: `transcriptid DESC` for deterministic ordering
+- All components from the selected transcript are preserved
 
 ## References
 
