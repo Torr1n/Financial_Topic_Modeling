@@ -168,6 +168,19 @@ This is simpler than database-based checkpointing and works with S3's eventual c
 
 ## Implementation Notes
 
+### Implementation Updates (2026-01-28)
+
+The implementation landed in `cloud/terraform/batch/` and `cloud/containers/map/entrypoint.py`. The following updates reflect the current, validated behavior:
+
+- **GPU AMI pinned**: Batch compute environment explicitly uses `ECS_AL2_NVIDIA` to ensure NVIDIA drivers are present.
+- **Secrets Manager access**: Both execution **and job roles** have `secretsmanager:GetSecretValue` (plus `kms:Decrypt`) to support WRDS credential fallback.
+- **Failure tolerance + circuit breaker**:
+  - `ALLOW_FAILURES=true` by default (production tolerance for rare per‑firm failures).
+  - Circuit breaker trips on critical errors, excessive consecutive failures, or high failure rate (env‑configurable).
+- **Job definition env vars**: Job‑specific vars are passed at submission (manifest key, batch ID, quarter). Static vars include `S3_BUCKET` and `CHECKPOINT_INTERVAL`.
+
+These changes were validated end‑to‑end with real WRDS data and Batch integration tests.
+
 ### Job Definition
 ```hcl
 resource "aws_batch_job_definition" "firm_processor" {
@@ -185,14 +198,17 @@ resource "aws_batch_job_definition" "firm_processor" {
 
     environment = [
       { name = "S3_BUCKET", value = var.s3_bucket },
-      { name = "LLM_BASE_URL", value = var.vllm_endpoint },
-      { name = "WRDS_USERNAME", value = var.wrds_username }
+      { name = "CHECKPOINT_INTERVAL", value = "50" }
     ]
 
     secrets = [
       {
+        name      = "WRDS_USERNAME",
+        valueFrom = data.aws_secretsmanager_secret.wrds.arn
+      },
+      {
         name      = "WRDS_PASSWORD",
-        valueFrom = aws_secretsmanager_secret.wrds.arn
+        valueFrom = data.aws_secretsmanager_secret.wrds.arn
       }
     ]
 
@@ -211,7 +227,7 @@ resource "aws_batch_job_definition" "firm_processor" {
   }
 
   timeout {
-    attempt_duration_seconds = 14400  # 4 hours
+    attempt_duration_seconds = 18000  # 5 hours
   }
 }
 ```

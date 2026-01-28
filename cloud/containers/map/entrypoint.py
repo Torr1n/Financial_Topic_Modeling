@@ -16,6 +16,9 @@ Environment Variables (set by Batch job definition + submission):
     BATCH_ID: This batch's identifier within the manifest
     QUARTER: Quarter being processed (e.g., "2023Q1")
     S3_BUCKET: Output bucket name
+    DATA_SOURCE: Data source type ("s3" or "wrds", default: "wrds" for backward compat)
+                 - "s3": Read from prefetch location (production, no MFA)
+                 - "wrds": Direct WRDS connection (local dev, requires MFA)
     CHECKPOINT_INTERVAL: Firms per checkpoint (default: 50)
     EMBEDDING_MODEL_NAME: SentenceTransformer model (default: all-mpnet-base-v2)
     ALLOW_FAILURES: If "true", tolerates per-firm errors (default: true for production)
@@ -49,8 +52,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import project modules (PYTHONPATH=/app set in Dockerfile)
-from cloud.src.connectors.wrds_connector import WRDSConnector
 from cloud.src.firm_processor import FirmProcessor
+from cloud.src.interfaces import DataConnector
 from cloud.src.topic_models.bertopic_model import BERTopicModel
 
 
@@ -135,6 +138,35 @@ def get_env_required(name: str) -> str:
 def get_env_optional(name: str, default: str) -> str:
     """Get optional environment variable with default."""
     return os.environ.get(name, default)
+
+
+def get_data_connector(data_source: str, quarter: str, bucket: str) -> DataConnector:
+    """
+    Factory function to create the appropriate data connector.
+
+    Args:
+        data_source: "s3" or "wrds"
+        quarter: Quarter string (e.g., "2023Q1") - used for S3 connector
+        bucket: S3 bucket name - used for S3 connector
+
+    Returns:
+        DataConnector instance (S3TranscriptConnector or WRDSConnector)
+
+    Raises:
+        ValueError: If data_source is unknown
+    """
+    if data_source == "s3":
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+        logger.info(f"Using S3TranscriptConnector for quarter {quarter}")
+        return S3TranscriptConnector(bucket=bucket, quarter=quarter)
+    elif data_source == "wrds":
+        from cloud.src.connectors.wrds_connector import WRDSConnector
+        logger.info("Using WRDSConnector (direct WRDS connection)")
+        return WRDSConnector()
+    else:
+        raise ValueError(
+            f"Unknown DATA_SOURCE: '{data_source}'. Expected 's3' or 'wrds'."
+        )
 
 
 def quarter_to_date_range(quarter: str) -> Tuple[str, str]:
@@ -363,7 +395,7 @@ def write_parquet_chunk(
 
 
 def process_firms(
-    connector: WRDSConnector,
+    connector: DataConnector,
     firm_ids: List[str],
     start_date: str,
     end_date: str,
@@ -382,7 +414,7 @@ def process_firms(
     Process firms with checkpointing, failure tracking, and circuit breaker.
 
     Args:
-        connector: WRDS connector (already connected)
+        connector: Data connector (S3TranscriptConnector or WRDSConnector)
         firm_ids: All firm IDs assigned to this batch
         start_date, end_date: Date range for transcript fetch
         embedding_model: Pre-loaded SentenceTransformer
@@ -557,6 +589,7 @@ def main():
     batch_id = get_env_required("BATCH_ID")
     quarter = get_env_required("QUARTER")
     bucket = get_env_required("S3_BUCKET")
+    data_source = get_env_optional("DATA_SOURCE", "wrds")  # Default wrds for backward compat
     checkpoint_interval = int(get_env_optional("CHECKPOINT_INTERVAL", "50"))
     embedding_model_name = get_env_optional("EMBEDDING_MODEL_NAME", "all-mpnet-base-v2")
     allow_failures = get_env_optional("ALLOW_FAILURES", "true").lower() == "true"  # Default true for production
@@ -565,6 +598,7 @@ def main():
     logger.info(f"Batch ID: {batch_id}")
     logger.info(f"Quarter: {quarter}")
     logger.info(f"S3 Bucket: {bucket}")
+    logger.info(f"Data source: {data_source}")
     logger.info(f"Checkpoint interval: {checkpoint_interval} firms")
     logger.info(f"Embedding model: {embedding_model_name}")
     logger.info(f"Allow failures: {allow_failures}")
@@ -573,14 +607,17 @@ def main():
         f"max_rate={circuit_breaker.max_failure_rate:.1%} (after {circuit_breaker.min_processed_for_rate} firms)"
     )
 
-    # Check WRDS credentials - warn but don't fail (WRDSConnector handles fallback)
-    if not os.environ.get("WRDS_USERNAME") or not os.environ.get("WRDS_PASSWORD"):
-        logger.warning(
-            "WRDS_USERNAME/WRDS_PASSWORD not set - WRDSConnector will use "
-            ".pgpass or Secrets Manager fallback"
-        )
+    # Check WRDS credentials only if using WRDS data source
+    if data_source == "wrds":
+        if not os.environ.get("WRDS_USERNAME") or not os.environ.get("WRDS_PASSWORD"):
+            logger.warning(
+                "WRDS_USERNAME/WRDS_PASSWORD not set - WRDSConnector will use "
+                ".pgpass or Secrets Manager fallback"
+            )
+        else:
+            logger.info("WRDS credentials found in environment")
     else:
-        logger.info("WRDS credentials found in environment")
+        logger.info(f"Using {data_source} data source (WRDS credentials not needed)")
 
     # Initialize S3 client
     s3_client = boto3.client("s3")
@@ -620,11 +657,12 @@ def main():
     processor = FirmProcessor(topic_model, config)
     logger.info("Topic model and processor initialized")
 
-    # Process firms with WRDS connector
-    logger.info("Connecting to WRDS...")
-    with WRDSConnector() as connector:
-        logger.info("WRDS connection established")
+    # Create data connector based on DATA_SOURCE
+    logger.info(f"Creating {data_source} data connector...")
+    connector = get_data_connector(data_source, quarter, bucket)
+    logger.info("Data connector ready")
 
+    try:
         result = process_firms(
             connector=connector,
             firm_ids=firm_ids,
@@ -641,6 +679,8 @@ def main():
             checkpoint_interval=checkpoint_interval,
             circuit_breaker=circuit_breaker,
         )
+    finally:
+        connector.close()
 
     logger.info("=" * 60)
 

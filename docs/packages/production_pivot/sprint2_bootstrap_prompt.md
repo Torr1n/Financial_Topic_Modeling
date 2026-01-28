@@ -207,7 +207,3 @@ This is a research project that will be reviewed by faculty and potentially publ
 > "Real seniority is making hard problems look simple, not making simple problems look hard."
 
 The WRDS connector is a hard problem (data linking, SQL joins, connection management). Make it look simple.
-
-<Note from User>
-Leverage context-synthesizer, api-docs-synthesizer and plan subagents to methodologically manage your context by offloading exploration-heavy tasks as you see fit!!
-</Note from User>

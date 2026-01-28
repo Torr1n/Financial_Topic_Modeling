@@ -32,9 +32,12 @@ resource "aws_batch_job_definition" "firm_processor" {
     ]
 
     # Static environment variables (job-specific vars passed at submission)
+    # DATA_SOURCE=s3 for production - uses prefetch data, no WRDS/MFA needed
+    # Override with DATA_SOURCE=wrds for local development if needed
     environment = [
       { name = "S3_BUCKET", value = var.s3_bucket_name },
-      { name = "CHECKPOINT_INTERVAL", value = tostring(var.checkpoint_interval) }
+      { name = "CHECKPOINT_INTERVAL", value = tostring(var.checkpoint_interval) },
+      { name = "DATA_SOURCE", value = "s3" }
     ]
 
     # WRDS credentials injected from Secrets Manager
