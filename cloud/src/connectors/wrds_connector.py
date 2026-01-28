@@ -120,10 +120,12 @@ ORDER BY firm_id;
 
 # Query for firm IDs in a date range WITH PERMNO linking (for prefetch)
 # Only returns firms that have valid PERMNO links (same filters as TRANSCRIPT_QUERY)
+# Includes link date validity to match exactly what fetch_transcripts will accept
 FIRM_IDS_IN_RANGE_QUERY = """
 WITH firms_in_range AS (
     SELECT DISTINCT
         td.companyid::text AS firm_id,
+        td.mostimportantdateutc::date AS earnings_call_date,
         wg.gvkey
     FROM ciq.wrds_transcript_detail td
     LEFT JOIN ciq.wrds_gvkey wg ON td.companyid = wg.companyid
@@ -138,6 +140,8 @@ with_permno AS (
     LEFT JOIN crsp.ccmxpf_linktable ccm ON fir.gvkey = ccm.gvkey
         AND ccm.linktype IN ('LU', 'LC')
         AND ccm.linkprim IN ('P', 'C')
+        AND fir.earnings_call_date >= ccm.linkdt
+        AND fir.earnings_call_date <= COALESCE(ccm.linkenddt, '9999-12-31')
 )
 SELECT firm_id FROM with_permno WHERE permno IS NOT NULL ORDER BY firm_id;
 """

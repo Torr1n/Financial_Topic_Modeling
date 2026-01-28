@@ -150,6 +150,35 @@ def get_available_firm_ids(self) -> List[str]:
     """
 ```
 
+### get_firm_ids_in_range
+
+```python
+def get_firm_ids_in_range(self, start_date: str, end_date: str) -> List[str]:
+    """
+    Get firm IDs with transcripts in date range that have valid PERMNO links.
+
+    This is a lightweight query for prefetch to discover firms without
+    loading full transcript data. Only returns firms that will pass the
+    PERMNO filter in fetch_transcripts().
+
+    Note: This is NOT part of the DataConnector interface - it's a helper
+    for WRDSPrefetcher to avoid loading entire quarter into memory.
+
+    Args:
+        start_date: YYYY-MM-DD format (inclusive)
+        end_date: YYYY-MM-DD format (inclusive)
+
+    Returns:
+        Sorted list of firm IDs with valid PERMNO links
+
+    Example:
+        >>> connector = WRDSConnector()
+        >>> firms = connector.get_firm_ids_in_range("2023-01-01", "2023-03-31")
+        >>> len(firms)
+        1247
+    """
+```
+
 ### close
 
 ```python
@@ -311,6 +340,35 @@ SELECT DISTINCT td.companyid::text AS firm_id
 FROM ciq.wrds_transcript_detail td
 WHERE td.keydeveventtypeid = 48
 ORDER BY firm_id;
+```
+
+### Firm IDs in Date Range Query (for Prefetch)
+
+Lightweight query returning only firm IDs that have valid PERMNO links (same filters as main transcript query):
+
+```sql
+WITH firms_in_range AS (
+    SELECT DISTINCT
+        td.companyid::text AS firm_id,
+        td.mostimportantdateutc::date AS earnings_call_date,
+        wg.gvkey
+    FROM ciq.wrds_transcript_detail td
+    LEFT JOIN ciq.wrds_gvkey wg ON td.companyid = wg.companyid
+    WHERE td.mostimportantdateutc BETWEEN %(start_date)s AND %(end_date)s
+      AND td.keydeveventtypeid = 48
+),
+with_permno AS (
+    SELECT DISTINCT
+        fir.firm_id,
+        ccm.lpermno AS permno
+    FROM firms_in_range fir
+    LEFT JOIN crsp.ccmxpf_linktable ccm ON fir.gvkey = ccm.gvkey
+        AND ccm.linktype IN ('LU', 'LC')
+        AND ccm.linkprim IN ('P', 'C')
+        AND fir.earnings_call_date >= ccm.linkdt
+        AND fir.earnings_call_date <= COALESCE(ccm.linkenddt, '9999-12-31')
+)
+SELECT firm_id FROM with_permno WHERE permno IS NOT NULL ORDER BY firm_id;
 ```
 
 ### WRDS Tables Used
