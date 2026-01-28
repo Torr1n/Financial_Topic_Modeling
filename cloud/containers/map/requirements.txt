@@ -1,20 +1,27 @@
 # Financial Topic Modeling - Map Phase Dependencies
-# Note: PyTorch and cuML installed separately in Dockerfile for CUDA compatibility
+# Python 3.10 REQUIRED | CUDA 11.8 runtime
+# Install order matters - see Dockerfile
+
+# Core numerical packages (constraints for RAPIDS compatibility)
+numpy>=1.23,<2.0
+pandas>=2.0,<2.2.2
+scipy>=1.8.0
+scikit-learn==1.2
+pyarrow>=14.0.1,<15.0.0
+
+# Note: PyTorch, cuML, cuDF installed separately in Dockerfile for proper ordering
+
+# Transformers ecosystem
+transformers>=4.34.0,<4.43.0
+sentence-transformers>=3.0.0
 
 # Topic Modeling
 bertopic>=0.16.0
-sentence-transformers>=2.7.0
-umap-learn>=0.5.0
 hdbscan>=0.8.33
-scikit-learn>=1.4.0
+umap-learn>=0.5.5
 
 # NLP
 spacy>=3.7.0
-
-# Data Processing
-numpy>=1.24.0,<2.0.0
-pandas>=2.0.0,<2.1.0  # cuml-cu11 24.02 incompatible with pandas 2.1+ (is_extension_type removed)
-pyarrow>=14.0.0
 
 # AWS
 boto3>=1.34.0
@@ -29,3 +36,4 @@ pyyaml>=6.0
 
 # Progress
 tqdm>=4.66.0
+joblib>=1.3.0
