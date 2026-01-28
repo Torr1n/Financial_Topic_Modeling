@@ -26,9 +26,12 @@ import pytest
 
 from cloud.src.models import FirmTranscriptData, TranscriptData, TranscriptSentence
 
-# Skip all tests if no AWS credentials
+# Skip all tests if no AWS credentials (use boto3 resolution, not env vars only)
+import boto3
+
+_creds = boto3.Session().get_credentials()
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("AWS_ACCESS_KEY_ID"),
+    not _creds or not _creds.access_key,
     reason="AWS credentials not available"
 )
 
