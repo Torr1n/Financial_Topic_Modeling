@@ -51,6 +51,11 @@ resource "aws_batch_compute_environment" "gpu_spot" {
     instance_role       = aws_iam_instance_profile.batch_instance.arn
     spot_iam_fleet_role = aws_iam_role.spot_fleet.arn
 
+    # Explicitly use GPU-optimized AMI with NVIDIA drivers
+    ec2_configuration {
+      image_type = "ECS_AL2_NVIDIA"
+    }
+
     tags = {
       Name    = "ftm-batch-instance"
       Project = "financial-topic-modeling"
