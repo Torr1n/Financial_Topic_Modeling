@@ -13,7 +13,7 @@ spacy>=3.7.0
 
 # Data Processing
 numpy>=1.24.0,<2.0.0
-pandas>=2.0.0
+pandas>=2.0.0,<2.1.0  # cuml-cu11 24.02 incompatible with pandas 2.1+ (is_extension_type removed)
 pyarrow>=14.0.0
 
 # AWS
