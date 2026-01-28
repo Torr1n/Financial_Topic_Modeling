@@ -31,13 +31,12 @@ import boto3
 
 _creds = boto3.Session().get_credentials()
 pytestmark = pytest.mark.skipif(
-    not _creds or not _creds.access_key,
-    reason="AWS credentials not available"
+    not _creds or not _creds.access_key, reason="AWS credentials not available"
 )
 
 
 # Test bucket (should be set for integration tests)
-TEST_BUCKET = os.environ.get("FTM_TEST_BUCKET", "ftm-pipeline-test")
+TEST_BUCKET = os.environ.get("FTM_TEST_BUCKET", "ftm-pipeline-78ea68c8")
 
 
 class TestPrefetchToS3Integration:
@@ -148,9 +147,18 @@ class TestPrefetchToS3Integration:
             table = pq.read_table(BytesIO(chunk_response["Body"].read()))
 
             expected_columns = {
-                "firm_id", "firm_name", "permno", "gvkey", "transcript_id",
-                "earnings_call_date", "sentence_id", "raw_text", "cleaned_text",
-                "speaker_type", "position", "quarter",
+                "firm_id",
+                "firm_name",
+                "permno",
+                "gvkey",
+                "transcript_id",
+                "earnings_call_date",
+                "sentence_id",
+                "raw_text",
+                "cleaned_text",
+                "speaker_type",
+                "position",
+                "quarter",
             }
             assert set(table.schema.names) == expected_columns
 
@@ -222,9 +230,9 @@ class TestParquetSchemaCompliance:
 
         for field in PREFETCH_SCHEMA:
             assert field.name in expected, f"Unexpected field: {field.name}"
-            assert field.type == expected[field.name], (
-                f"Type mismatch for {field.name}: {field.type} != {expected[field.name]}"
-            )
+            assert (
+                field.type == expected[field.name]
+            ), f"Type mismatch for {field.name}: {field.type} != {expected[field.name]}"
 
         assert len(PREFETCH_SCHEMA) == len(expected)
 
@@ -263,7 +271,14 @@ class TestManifestStructure:
         manifest = json.loads(manifest_body)
 
         # Check required fields per plan
-        required_fields = ["quarter", "created_at", "n_firms", "n_chunks", "chunk_sizes", "firm_to_chunk"]
+        required_fields = [
+            "quarter",
+            "created_at",
+            "n_firms",
+            "n_chunks",
+            "chunk_sizes",
+            "firm_to_chunk",
+        ]
         for field in required_fields:
             assert field in manifest, f"Missing required field: {field}"
 
@@ -316,20 +331,22 @@ class TestMemoryBoundedReads:
 
                 rows = []
                 for fid in firms:
-                    rows.append({
-                        "firm_id": fid,
-                        "firm_name": f"Corp {fid}",
-                        "permno": 10000,
-                        "gvkey": "G1",
-                        "transcript_id": "t1",
-                        "earnings_call_date": pd.Timestamp("2023-01-15").date(),
-                        "sentence_id": f"{fid}_s1",
-                        "raw_text": "test",
-                        "cleaned_text": "test",
-                        "speaker_type": "CEO",
-                        "position": 0,
-                        "quarter": "2023Q1",
-                    })
+                    rows.append(
+                        {
+                            "firm_id": fid,
+                            "firm_name": f"Corp {fid}",
+                            "permno": 10000,
+                            "gvkey": "G1",
+                            "transcript_id": "t1",
+                            "earnings_call_date": pd.Timestamp("2023-01-15").date(),
+                            "sentence_id": f"{fid}_s1",
+                            "raw_text": "test",
+                            "cleaned_text": "test",
+                            "speaker_type": "CEO",
+                            "position": 0,
+                            "quarter": "2023Q1",
+                        }
+                    )
 
                 df = pd.DataFrame(rows)
                 buf = BytesIO()
@@ -348,9 +365,9 @@ class TestMemoryBoundedReads:
 
         # Request 500 firms from 3 non-adjacent chunks (0, 12, 24)
         firm_ids = (
-            [f"firm_{i:04d}" for i in range(0, 100)] +      # chunk 0
-            [f"firm_{i:04d}" for i in range(2400, 2500)] +  # chunk 12
-            [f"firm_{i:04d}" for i in range(4800, 5000)]    # chunk 24
+            [f"firm_{i:04d}" for i in range(0, 100)]  # chunk 0
+            + [f"firm_{i:04d}" for i in range(2400, 2500)]  # chunk 12
+            + [f"firm_{i:04d}" for i in range(4800, 5000)]  # chunk 24
         )
 
         connector.fetch_transcripts(firm_ids, "2023-01-01", "2023-03-31")
@@ -372,7 +389,9 @@ class TestEndToEndWithMockBatch:
 
         from cloud.containers.map.entrypoint import get_data_connector
 
-        with patch("cloud.containers.map.entrypoint.S3TranscriptConnector") as mock_cls:
+        with patch(
+            "cloud.src.connectors.s3_connector.S3TranscriptConnector"
+        ) as mock_cls:
             mock_connector = MagicMock()
             mock_cls.return_value = mock_connector
 
