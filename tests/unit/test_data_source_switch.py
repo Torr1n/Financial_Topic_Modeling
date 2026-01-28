@@ -18,7 +18,7 @@ class TestGetDataConnector:
 
     def test_returns_s3_connector_for_s3_source(self):
         """Should return S3TranscriptConnector when data_source='s3'."""
-        with patch("cloud.containers.map.entrypoint.S3TranscriptConnector") as mock_cls:
+        with patch("cloud.src.connectors.s3_connector.S3TranscriptConnector") as mock_cls:
             mock_connector = MagicMock()
             mock_cls.return_value = mock_connector
 
@@ -32,7 +32,7 @@ class TestGetDataConnector:
 
     def test_returns_wrds_connector_for_wrds_source(self):
         """Should return WRDSConnector when data_source='wrds'."""
-        with patch("cloud.containers.map.entrypoint.WRDSConnector") as mock_cls:
+        with patch("cloud.src.connectors.wrds_connector.WRDSConnector") as mock_cls:
             mock_connector = MagicMock()
             mock_cls.return_value = mock_connector
 
