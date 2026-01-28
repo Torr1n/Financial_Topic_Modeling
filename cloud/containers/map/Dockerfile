@@ -24,7 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # Install PyTorch with CUDA 11.8 support
-RUN pip install --no-cache-dir torch==2.0.1 --index-url https://download.pytorch.org/whl/cu118
+# Note: sentence-transformers >= 3.0 requires PyTorch >= 2.2
+RUN pip install --no-cache-dir torch==2.2.2 --index-url https://download.pytorch.org/whl/cu118
 
 # Install cuML for GPU-accelerated UMAP/HDBSCAN
 # Note: cuml-cu11 is the stable version for CUDA 11.x
