@@ -675,19 +675,18 @@ class TestBatchIntegration:
             s3_bucket=batch_config["s3_bucket"],
         )
 
-        # Sample of 10 firm IDs (should be real firms in WRDS for Q1 2023)
-        # These are example IDs - replace with real ones from WRDS
+        # Real Capital IQ company IDs from WRDS
         firm_ids = [
-            "374372246",  # Lamb Weston
-            "24937",  # Apple
-            "1045810",  # Microsoft
-            "1418135",  # Amazon
-            "1652044",  # Alphabet
-            "804328",  # Facebook/Meta
-            "1000209",  # Netflix
-            "1000697",  # Tesla
-            "1403568",  # Nvidia
-            "789019",  # Intel
+            "18749",     # Amazon.com, Inc.
+            "19691",     # Cisco Systems, Inc.
+            "21835",     # Microsoft Corporation
+            "24937",     # Apple Inc.
+            "29096",     # Alphabet Inc.
+            "32307",     # NVIDIA Corporation
+            "20765463",  # Meta Platforms, Inc.
+            "25016048",  # Broadcom Inc.
+            "27444752",  # Tesla, Inc.
+            "33348547",  # Arista Networks Inc
         ]
 
         # Submit quarter
