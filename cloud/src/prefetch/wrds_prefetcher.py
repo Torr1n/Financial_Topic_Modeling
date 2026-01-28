@@ -357,20 +357,13 @@ class WRDSPrefetcher:
         connector = self._get_connector()
 
         try:
-            # If no firm_ids specified, we need to fetch all available
+            # If no firm_ids specified, discover firms via lightweight query
             if firm_ids is None:
-                # Fetch in batches to avoid memory issues
-                # For now, fetch all firms in date range via a single query
-                logger.info("Fetching transcripts for all firms in date range...")
-                transcript_data = connector.fetch_transcripts(
-                    firm_ids=[],  # Empty list = all firms
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                firm_ids = list(transcript_data.firms.keys())
-                logger.info(f"Found {len(firm_ids)} firms with transcripts")
-            else:
-                transcript_data = None
+                # Use lightweight query to get firm IDs (not full transcripts)
+                # This avoids loading entire quarter into memory
+                logger.info("Discovering firms with transcripts in date range...")
+                firm_ids = connector.get_firm_ids_in_range(start_date, end_date)
+                logger.info(f"Found {len(firm_ids)} firms with PERMNO links")
 
             # Filter out already completed firms
             pending_firms = [f for f in firm_ids if f not in completed]
@@ -402,17 +395,12 @@ class WRDSPrefetcher:
                 logger.info(f"Processing firm {firm_id} ({i + 1}/{len(pending_firms)})")
 
                 try:
-                    # Fetch transcript for this firm if we don't have bulk data
-                    if transcript_data and firm_id in transcript_data.firms:
-                        firm_data = TranscriptData(
-                            firms={firm_id: transcript_data.firms[firm_id]}
-                        )
-                    else:
-                        firm_data = connector.fetch_transcripts(
-                            firm_ids=[firm_id],
-                            start_date=start_date,
-                            end_date=end_date,
-                        )
+                    # Fetch transcript for this firm (one at a time to bound memory)
+                    firm_data = connector.fetch_transcripts(
+                        firm_ids=[firm_id],
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
 
                     # Skip firms without data
                     if firm_id not in firm_data.firms:
@@ -432,6 +420,7 @@ class WRDSPrefetcher:
                     buffer.extend(rows)
                     firms_in_buffer.append(firm_id)
                     total_sentences += len(rows)
+                    firms_since_checkpoint += 1  # Count successful firms for checkpoint interval
 
                     # Write chunk when buffer reaches size
                     if len(firms_in_buffer) >= self.CHUNK_SIZE:

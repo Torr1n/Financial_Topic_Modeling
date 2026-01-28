@@ -295,6 +295,9 @@ class QuarterOrchestrator:
         logger.info(f"Submitted job {batch_id}: {job_id}")
         return job_id
 
+    # AWS Batch describe_jobs limit
+    DESCRIBE_JOBS_BATCH_SIZE = 100
+
     def _wait_for_jobs(
         self,
         job_ids: List[str],
@@ -319,17 +322,20 @@ class QuarterOrchestrator:
         logger.info(f"Waiting for {len(job_ids)} jobs to complete...")
 
         while pending and (time.time() - start_time) < timeout:
-            # Check status of pending jobs
-            response = self._batch_client.describe_jobs(jobs=list(pending))
+            # Check status of pending jobs in chunks (AWS limit: 100 per call)
+            pending_list = list(pending)
+            for i in range(0, len(pending_list), self.DESCRIBE_JOBS_BATCH_SIZE):
+                chunk = pending_list[i:i + self.DESCRIBE_JOBS_BATCH_SIZE]
+                response = self._batch_client.describe_jobs(jobs=chunk)
 
-            for job in response.get("jobs", []):
-                job_id = job["jobId"]
-                status = job["status"]
+                for job in response.get("jobs", []):
+                    job_id = job["jobId"]
+                    status = job["status"]
 
-                if status in ("SUCCEEDED", "FAILED"):
-                    results[job_id] = status
-                    pending.remove(job_id)
-                    logger.info(f"Job {job['jobName']} {status}")
+                    if status in ("SUCCEEDED", "FAILED"):
+                        results[job_id] = status
+                        pending.discard(job_id)
+                        logger.info(f"Job {job['jobName']} {status}")
 
             if pending:
                 logger.info(f"{len(pending)} jobs still running...")

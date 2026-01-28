@@ -383,3 +383,74 @@ class TestRunPrefetch:
             mock_prefetcher_cls.assert_called_once()
             mock_prefetcher.prefetch_quarter.assert_called_once_with("2023Q1", firm_ids=None)
             assert result["n_firms"] == 100
+
+
+class TestDescribeJobsChunking:
+    """Tests for describe_jobs AWS limit handling."""
+
+    def test_describe_jobs_chunks_large_lists(self):
+        """Should chunk describe_jobs calls when >100 jobs."""
+        mock_batch = MagicMock()
+
+        # Track all describe_jobs calls
+        describe_calls = []
+
+        def mock_describe(jobs):
+            describe_calls.append(jobs)
+            # Return all as SUCCEEDED immediately
+            return {
+                "jobs": [
+                    {"jobId": jid, "jobName": f"job-{jid}", "status": "SUCCEEDED"}
+                    for jid in jobs
+                ]
+            }
+
+        mock_batch.describe_jobs = mock_describe
+
+        orchestrator = QuarterOrchestrator(
+            s3_bucket="test-bucket",
+            job_definition="test-job",
+            job_queue="test-queue",
+            batch_client=mock_batch,
+        )
+
+        # Create 250 job IDs
+        job_ids = [f"job-{i:04d}" for i in range(250)]
+
+        results = orchestrator._wait_for_jobs(job_ids, poll_interval=0, timeout=10)
+
+        # Should have made 3 describe_jobs calls (100, 100, 50)
+        assert len(describe_calls) == 3
+        assert len(describe_calls[0]) == 100
+        assert len(describe_calls[1]) == 100
+        assert len(describe_calls[2]) == 50
+
+        # All jobs should be marked as SUCCEEDED
+        assert len(results) == 250
+        assert all(status == "SUCCEEDED" for status in results.values())
+
+    def test_describe_jobs_works_with_small_lists(self):
+        """Should handle <100 jobs without issues."""
+        mock_batch = MagicMock()
+        mock_batch.describe_jobs.return_value = {
+            "jobs": [
+                {"jobId": "job-001", "jobName": "test", "status": "SUCCEEDED"},
+                {"jobId": "job-002", "jobName": "test", "status": "SUCCEEDED"},
+            ]
+        }
+
+        orchestrator = QuarterOrchestrator(
+            s3_bucket="test-bucket",
+            job_definition="test-job",
+            job_queue="test-queue",
+            batch_client=mock_batch,
+        )
+
+        results = orchestrator._wait_for_jobs(
+            ["job-001", "job-002"],
+            poll_interval=0,
+            timeout=10,
+        )
+
+        assert len(results) == 2
+        mock_batch.describe_jobs.assert_called_once()

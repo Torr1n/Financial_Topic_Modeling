@@ -377,6 +377,145 @@ class TestPrefetchQuarter:
         manifest_key = "prefetch/transcripts/quarter=2023Q1/manifest.json"
         assert manifest_key in storage
 
+    def test_prefetch_discovers_firms_when_none_provided(self):
+        """When firm_ids=None, should use get_firm_ids_in_range (not load all transcripts)."""
+        storage = {}
+
+        def mock_put(Bucket, Key, Body, **kwargs):
+            storage[Key] = Body if isinstance(Body, bytes) else Body.encode("utf-8")
+
+        def mock_get(Bucket, Key):
+            if Key in storage:
+                body = storage[Key]
+                return {"Body": BytesIO(body if isinstance(body, bytes) else body.encode())}
+            from botocore.exceptions import ClientError
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+
+        def mock_upload(local_path, bucket, key):
+            with open(local_path, "rb") as f:
+                storage[key] = f.read()
+
+        def mock_delete(Bucket, Key):
+            storage.pop(Key, None)
+
+        mock_s3 = MagicMock()
+        mock_s3.put_object = mock_put
+        mock_s3.get_object = mock_get
+        mock_s3.upload_file = mock_upload
+        mock_s3.delete_object = mock_delete
+
+        mock_connector = MagicMock()
+
+        # get_firm_ids_in_range should be called (lightweight query)
+        mock_connector.get_firm_ids_in_range.return_value = ["firm_001", "firm_002"]
+
+        # fetch_transcripts for individual firms
+        def mock_fetch(firm_ids, start_date, end_date):
+            data = {}
+            for fid in firm_ids:
+                data[fid] = FirmTranscriptData(
+                    firm_id=fid,
+                    firm_name=f"Corp {fid}",
+                    sentences=[
+                        TranscriptSentence(
+                            sentence_id=f"{fid}_t1_0000",
+                            raw_text="Test",
+                            cleaned_text="test",
+                            speaker_type="CEO",
+                            position=0,
+                        )
+                    ],
+                    metadata={"permno": 12345},
+                )
+            return TranscriptData(firms=data)
+
+        mock_connector.fetch_transcripts = mock_fetch
+
+        prefetcher = WRDSPrefetcher(
+            bucket="test-bucket",
+            s3_client=mock_s3,
+            wrds_connector=mock_connector,
+        )
+        prefetcher.CHUNK_SIZE = 100
+
+        # Pass firm_ids=None to trigger discovery
+        result = prefetcher.prefetch_quarter("2023Q1", firm_ids=None)
+
+        # Should have called get_firm_ids_in_range
+        mock_connector.get_firm_ids_in_range.assert_called_once_with("2023-01-01", "2023-03-31")
+
+        # Should have processed discovered firms
+        assert result["n_firms"] == 2
+
+    def test_checkpoint_interval_includes_successful_firms(self):
+        """Should checkpoint after CHECKPOINT_INTERVAL firms including successes."""
+        checkpoint_saves = []
+        storage = {}
+
+        def mock_put(Bucket, Key, Body, **kwargs):
+            storage[Key] = Body if isinstance(Body, bytes) else Body.encode("utf-8")
+            if "_checkpoint.json" in Key:
+                checkpoint_saves.append(json.loads(Body))
+
+        def mock_get(Bucket, Key):
+            if Key in storage:
+                body = storage[Key]
+                return {"Body": BytesIO(body if isinstance(body, bytes) else body.encode())}
+            from botocore.exceptions import ClientError
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+
+        def mock_upload(local_path, bucket, key):
+            with open(local_path, "rb") as f:
+                storage[key] = f.read()
+
+        def mock_delete(Bucket, Key):
+            storage.pop(Key, None)
+
+        mock_s3 = MagicMock()
+        mock_s3.put_object = mock_put
+        mock_s3.get_object = mock_get
+        mock_s3.upload_file = mock_upload
+        mock_s3.delete_object = mock_delete
+
+        mock_connector = MagicMock()
+
+        def mock_fetch(firm_ids, start_date, end_date):
+            data = {}
+            for fid in firm_ids:
+                data[fid] = FirmTranscriptData(
+                    firm_id=fid,
+                    firm_name=f"Corp {fid}",
+                    sentences=[
+                        TranscriptSentence(
+                            sentence_id=f"{fid}_t1_0000",
+                            raw_text="Test",
+                            cleaned_text="test",
+                            speaker_type="CEO",
+                            position=0,
+                        )
+                    ],
+                    metadata={"permno": 12345},
+                )
+            return TranscriptData(firms=data)
+
+        mock_connector.fetch_transcripts = mock_fetch
+
+        prefetcher = WRDSPrefetcher(
+            bucket="test-bucket",
+            s3_client=mock_s3,
+            wrds_connector=mock_connector,
+        )
+        prefetcher.CHUNK_SIZE = 500  # Large chunk (won't trigger chunk-based checkpoint)
+        prefetcher.CHECKPOINT_INTERVAL = 5  # Small interval for testing
+
+        # Process 12 firms - should trigger checkpoint after firm 5 and 10
+        firm_ids = [f"firm_{i:03d}" for i in range(12)]
+        prefetcher.prefetch_quarter("2023Q1", firm_ids=firm_ids)
+
+        # Should have checkpoints at intervals (5, 10) plus final chunk write
+        # With 12 firms: checkpoint at 5, checkpoint at 10, chunk write at 12
+        assert len(checkpoint_saves) >= 2, f"Expected at least 2 checkpoints, got {len(checkpoint_saves)}"
+
 
 class TestParquetSchema:
     """Tests for Parquet schema compliance."""

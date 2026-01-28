@@ -118,6 +118,30 @@ WHERE td.keydeveventtypeid = 48
 ORDER BY firm_id;
 """
 
+# Query for firm IDs in a date range WITH PERMNO linking (for prefetch)
+# Only returns firms that have valid PERMNO links (same filters as TRANSCRIPT_QUERY)
+FIRM_IDS_IN_RANGE_QUERY = """
+WITH firms_in_range AS (
+    SELECT DISTINCT
+        td.companyid::text AS firm_id,
+        wg.gvkey
+    FROM ciq.wrds_transcript_detail td
+    LEFT JOIN ciq.wrds_gvkey wg ON td.companyid = wg.companyid
+    WHERE td.mostimportantdateutc BETWEEN %(start_date)s AND %(end_date)s
+      AND td.keydeveventtypeid = 48
+),
+with_permno AS (
+    SELECT DISTINCT
+        fir.firm_id,
+        ccm.lpermno AS permno
+    FROM firms_in_range fir
+    LEFT JOIN crsp.ccmxpf_linktable ccm ON fir.gvkey = ccm.gvkey
+        AND ccm.linktype IN ('LU', 'LC')
+        AND ccm.linkprim IN ('P', 'C')
+)
+SELECT firm_id FROM with_permno WHERE permno IS NOT NULL ORDER BY firm_id;
+"""
+
 
 # =============================================================================
 # WRDSConnector Class
@@ -635,6 +659,39 @@ class WRDSConnector(DataConnector):
             return sorted(firm_ids)
         except Exception as e:
             raise WRDSQueryError(f"Failed to fetch available firm IDs: {e}")
+
+    def get_firm_ids_in_range(self, start_date: str, end_date: str) -> List[str]:
+        """
+        Get firm IDs with transcripts in date range that have valid PERMNO links.
+
+        This is a lightweight query for prefetch to discover firms without
+        loading full transcript data. Only returns firms that will pass the
+        PERMNO filter in fetch_transcripts().
+
+        Note: This is NOT part of the DataConnector interface - it's a helper
+        for WRDSPrefetcher to avoid loading entire quarter into memory.
+
+        Args:
+            start_date: YYYY-MM-DD format (inclusive)
+            end_date: YYYY-MM-DD format (inclusive)
+
+        Returns:
+            Sorted list of firm IDs with valid PERMNO links
+        """
+        self._validate_date_format(start_date)
+        self._validate_date_format(end_date)
+
+        conn = self._get_connection()
+
+        params = {"start_date": start_date, "end_date": end_date}
+
+        try:
+            df = conn.raw_sql(FIRM_IDS_IN_RANGE_QUERY, params=params)
+            firm_ids = df["firm_id"].unique().tolist()
+            logger.info(f"Found {len(firm_ids)} firms with PERMNO in date range")
+            return sorted(firm_ids)
+        except Exception as e:
+            raise WRDSQueryError(f"Failed to fetch firm IDs in range: {e}")
 
     def close(self) -> None:
         """
