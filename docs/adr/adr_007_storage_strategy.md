@@ -83,10 +83,14 @@ s3://bucket/sentences/quarter=2023Q1/firm=AAPL/data.parquet  # ❌
 ```
 s3://financial-topic-modeling-prod/
 │
-├── raw/
-│   └── transcripts/                         # WRDS transcript cache (optional)
+├── prefetch/
+│   └── transcripts/                         # WRDS prefetch (preprocessed, MFA mitigation)
 │       └── quarter=2023Q1/
-│           └── transcripts.parquet
+│           ├── chunk_0000.parquet           # ~100-200 firms per chunk
+│           ├── chunk_0001.parquet
+│           ├── ...
+│           ├── manifest.json                # firm_id -> chunk mapping (gzip)
+│           └── _checkpoint.json             # resumable prefetch state
 │
 ├── intermediate/
 │   └── firm-topics/                         # Map phase output
@@ -118,6 +122,16 @@ s3://financial-topic-modeling-prod/
     └── quarter=2023Q1/
         └── themes_for_sentiment.parquet
 ```
+
+### Prefetch Staging Layer (MFA Mitigation)
+
+**Decision**: Use a prefetch staging layer to avoid WRDS MFA in Batch jobs.
+
+**Details**:
+- Prefetch runs once per quarter from a fixed-IP machine.
+- Data is **preprocessed** (cleaned_text, sentence_id, etc.) and written to `prefetch/transcripts/`.
+- Batch jobs read via `S3TranscriptConnector` using `manifest.json` (firm_id → chunk file mapping).
+- Prefetch data is **not** used by reduce directly; it only feeds the map phase.
 
 ### Parquet Schemas
 
@@ -217,6 +231,8 @@ Run a lightweight packaging job that:
 
 **Data flow**:
 ```
+Prefetch (fixed IP) → prefetch/transcripts/ (preprocessed)
+           ↓
 Map Phase → intermediate/firm-topics/ (contains topics + sentences)
            ↓
 Reduce Phase → reads topics only → writes themes.parquet

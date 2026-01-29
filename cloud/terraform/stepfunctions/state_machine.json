@@ -1,0 +1,143 @@
+{
+  "Comment": "Financial Topic Modeling - Quarter Processing Pipeline",
+  "StartAt": "CheckPrefetch",
+  "States": {
+    "CheckPrefetch": {
+      "Type": "Task",
+      "Resource": "${prefetch_check_arn}",
+      "Parameters": {
+        "quarter.$": "$.quarter",
+        "bucket.$": "$.bucket"
+      },
+      "ResultPath": "$.prefetch_result",
+      "Next": "PrefetchExists?"
+    },
+    "PrefetchExists?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.prefetch_result.exists",
+          "BooleanEquals": true,
+          "Next": "CreateBatchManifest"
+        }
+      ],
+      "Default": "PrefetchRequired"
+    },
+    "PrefetchRequired": {
+      "Type": "Fail",
+      "Error": "PrefetchRequiredError",
+      "Cause": "Prefetch manifest not found. Run prefetch first before batch processing."
+    },
+    "CreateBatchManifest": {
+      "Type": "Task",
+      "Resource": "${create_batch_manifest_arn}",
+      "Parameters": {
+        "quarter.$": "$.quarter",
+        "bucket.$": "$.bucket",
+        "batch_size.$": "$.batch_size"
+      },
+      "ResultPath": "$.manifest_result",
+      "Next": "ProcessBatches"
+    },
+    "ProcessBatches": {
+      "Type": "Map",
+      "ItemsPath": "$.manifest_result.batch_ids",
+      "MaxConcurrency": ${max_concurrency},
+      "ItemSelector": {
+        "batch_id.$": "$$.Map.Item.Value",
+        "quarter.$": "$.quarter",
+        "bucket.$": "$.bucket",
+        "manifest_s3_key.$": "$.manifest_result.manifest_s3_key"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "SubmitBatchJob",
+        "States": {
+          "SubmitBatchJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobName.$": "States.Format('ftm-{}', $.batch_id)",
+              "JobQueue": "${job_queue_arn}",
+              "JobDefinition": "${job_definition_arn}",
+              "ContainerOverrides": {
+                "Environment": [
+                  {
+                    "Name": "MANIFEST_S3_KEY",
+                    "Value.$": "$.manifest_s3_key"
+                  },
+                  {
+                    "Name": "BATCH_ID",
+                    "Value.$": "$.batch_id"
+                  },
+                  {
+                    "Name": "QUARTER",
+                    "Value.$": "$.quarter"
+                  },
+                  {
+                    "Name": "DATA_SOURCE",
+                    "Value": "s3"
+                  }
+                ]
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Batch.ServerException"],
+                "IntervalSeconds": 60,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.error",
+                "Next": "JobFailed"
+              }
+            ],
+            "ResultPath": "$.job_result",
+            "End": true
+          },
+          "JobFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "batch_id.$": "$.batch_id",
+              "status": "FAILED",
+              "error.$": "$.error"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.batch_results",
+      "Next": "CountResults"
+    },
+    "CountResults": {
+      "Type": "Pass",
+      "Parameters": {
+        "quarter.$": "$.quarter",
+        "bucket.$": "$.bucket",
+        "batch_results.$": "$.batch_results",
+        "total_batches.$": "$.manifest_result.n_batches",
+        "execution_name.$": "$$.Execution.Name"
+      },
+      "Next": "NotifyCompletion"
+    },
+    "NotifyCompletion": {
+      "Type": "Task",
+      "Resource": "${notify_completion_arn}",
+      "Parameters": {
+        "quarter.$": "$.quarter",
+        "total_batches.$": "$.total_batches",
+        "execution_name.$": "$.execution_name",
+        "succeeded.$": "States.ArrayLength(States.ArrayPartition($.batch_results, 1))",
+        "failed": 0
+      },
+      "ResultPath": "$.notification_result",
+      "End": true
+    }
+  }
+}

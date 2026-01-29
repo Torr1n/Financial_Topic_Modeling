@@ -44,6 +44,14 @@ Transform the Financial Topic Modeling pipeline from a single-GPU sequential pro
 
 ## Sprint Breakdown
 
+### Status Update (2026-01-28)
+- **Sprint 1**: Complete (ADRs/specs/diagrams approved)
+- **Sprint 2**: Complete (WRDSConnector + tests + real WRDS integration)
+- **Sprint 3**: Complete (AWS Batch infra + container + end-to-end Batch test)
+- **Sprint 4 (re-scoped)**: Complete (WRDS prefetch + S3 connector + DATA_SOURCE switch + orchestrator)
+- **Sprint 5**: Next (ECS vLLM + Step Functions)
+- **Sprint 6**: Final (Integration + sentiment validation)
+
 ### Sprint 1: Specification & Design (Current Sprint)
 **Objective:** Complete architectural specifications before writing any code.
 
@@ -155,7 +163,7 @@ resource "aws_batch_job_definition" "firm_processor" {
 **Key Design Decisions:**
 - Each Batch job processes a firm subset (chunked, not individual firms)
 - Jobs write Parquet to S3 (not PostgreSQL) in chunks of ~50 firms
-- XAI client remains as-is; vLLM integration deferred to Sprint 4
+- XAI client remains as-is; vLLM integration deferred to Sprint 5
 
 **Validation:**
 - [ ] Batch compute environment deployed
@@ -167,7 +175,32 @@ resource "aws_batch_job_definition" "firm_processor" {
 
 ---
 
-### Sprint 4: ECS vLLM + Step Functions Orchestration
+### Sprint 4: WRDS Prefetch + S3 Data Source (MFA Mitigation)
+**Objective:** Eliminate per-container WRDS MFA by prefetching transcripts once per quarter from a fixed-IP machine and reading from S3 in Batch.
+
+**Deliverables:**
+| File | Description |
+|------|-------------|
+| `cloud/src/prefetch/wrds_prefetcher.py` | Prefetch WRDS transcripts to S3 (preprocessed) |
+| `cloud/src/connectors/s3_connector.py` | Read prefetched Parquet via manifest |
+| `cloud/src/orchestrate/quarter_orchestrator.py` | Prefetch + Batch orchestration |
+| `cloud/containers/map/entrypoint.py` | DATA_SOURCE switch (`wrds` vs `s3`) |
+| `cloud/terraform/batch/job_definition.tf` | Default DATA_SOURCE=s3 |
+| `tests/unit/test_wrds_prefetcher.py` | Prefetch unit tests |
+| `tests/unit/test_s3_connector.py` | S3 connector unit tests |
+| `tests/unit/test_quarter_orchestrator.py` | Orchestrator unit tests |
+| `tests/integration/test_prefetch_integration.py` | Prefetch + S3 read integration test |
+
+**Validation:**
+- [ ] Prefetch writes manifest + chunks to S3 (single MFA approval)
+- [ ] S3TranscriptConnector reads prefetched data without re-preprocessing
+- [ ] Batch jobs run with DATA_SOURCE=s3 (no WRDS in Batch)
+
+**Halting Point:** Prefetch + S3-backed Batch validated before vLLM/Step Functions.
+
+---
+
+### Sprint 5: ECS vLLM + Step Functions Orchestration
 **Objective:** Add self-hosted LLM inference and multi-quarter orchestration.
 
 **Deliverables:**
@@ -206,7 +239,7 @@ base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
 
 ---
 
-### Sprint 5: Integration & Validation
+### Sprint 6: Integration & Validation
 **Objective:** End-to-end validation with 100 firms × 2 quarters, plus sentiment analysis integration.
 
 **Deliverables:**
@@ -248,16 +281,21 @@ s3://financial-topic-modeling-prod/
 |------|--------|--------|
 | `cloud/src/interfaces.py` | 2 | Add WRDSConnector stub to docstring |
 | `cloud/src/models.py` | 2 | Add permno/gvkey/link_date to metadata |
-| `cloud/src/llm/xai_client.py` | 4 | Configurable base_url for vLLM |
-| `cloud/terraform/main.tf` | 3-4 | Extend with Batch/ECS/Step Functions modules |
+| `cloud/src/llm/xai_client.py` | 5 | Configurable base_url for vLLM |
+| `cloud/containers/map/entrypoint.py` | 4 | DATA_SOURCE switch (wrds vs s3) |
+| `cloud/terraform/batch/job_definition.tf` | 4 | Default DATA_SOURCE=s3 |
+| `cloud/terraform/main.tf` | 5 | Extend with ECS/Step Functions modules |
 
 ### Must Create
 | File | Sprint | Purpose |
 |------|--------|---------|
 | `cloud/src/connectors/wrds_connector.py` | 2 | WRDS data ingestion with PERMNO linking |
-| `cloud/terraform/batch.tf` | 3 | AWS Batch infrastructure |
-| `cloud/terraform/ecs_vllm.tf` | 4 | ECS vLLM inference layer |
-| `cloud/terraform/step_functions.tf` | 4 | Step Functions orchestration |
+| `cloud/terraform/batch/` | 3 | AWS Batch infrastructure (separate root) |
+| `cloud/src/prefetch/wrds_prefetcher.py` | 4 | WRDS prefetch to S3 (MFA mitigation) |
+| `cloud/src/connectors/s3_connector.py` | 4 | S3TranscriptConnector (prefetch reader) |
+| `cloud/src/orchestrate/quarter_orchestrator.py` | 4 | Prefetch + Batch orchestration |
+| `cloud/terraform/ecs_vllm.tf` | 5 | ECS vLLM inference layer |
+| `cloud/terraform/step_functions.tf` | 5 | Step Functions orchestration |
 | `cloud/containers/map/Dockerfile` | 3 | Batch-compatible container |
 
 ### Reference Only
@@ -317,13 +355,19 @@ WRDS_USERNAME=xxx WRDS_PASSWORD=xxx pytest tests/integration/test_wrds_integrati
 ### Sprint 3 Verification
 ```bash
 # Deploy Batch infrastructure
-cd cloud/terraform && terraform apply -target=module.batch
+cd cloud/terraform/batch && terraform apply -var="s3_bucket_name=YOUR_BUCKET"
 
 # Submit test job
 python -c "from cloud.src.batch.job_submitter import BatchJobSubmitter; ..."
 ```
 
-### Sprint 5 Verification (Final E2E)
+### Sprint 4 Verification
+```bash
+# Prefetch integration test (requires AWS creds)
+pytest tests/integration/test_prefetch_integration.py -v -m integration
+```
+
+### Sprint 6 Verification (Final E2E)
 ```bash
 # Start Step Functions execution
 aws stepfunctions start-execution \
@@ -369,8 +413,8 @@ These clarifications have been incorporated into:
 
 ---
 
-## Next Steps (After Plan Approval)
+## Next Steps (Current)
 
-1. **Sprint 1 Continuation**: Write ADRs and interface specifications
-2. **Codex Review**: Share plan with Codex auditor for validation
-3. **Sprint 2 Kickoff**: Begin WRDS connector implementation with TDD
+1. **Sprint 5 Kickoff**: ECS vLLM + Step Functions orchestration
+2. **Sprint 6 Prep**: Define 100×2 E2E validation plan + sentiment integration checkpoints
+3. **Operational Readiness**: Confirm prefetch + S3-backed Batch runbooks and cleanup procedures

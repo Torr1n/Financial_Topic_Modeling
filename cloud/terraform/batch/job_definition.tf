@@ -34,11 +34,17 @@ resource "aws_batch_job_definition" "firm_processor" {
     # Static environment variables (job-specific vars passed at submission)
     # DATA_SOURCE=s3 for production - uses prefetch data, no WRDS/MFA needed
     # Override with DATA_SOURCE=wrds for local development if needed
-    environment = [
-      { name = "S3_BUCKET", value = var.s3_bucket_name },
-      { name = "CHECKPOINT_INTERVAL", value = tostring(var.checkpoint_interval) },
-      { name = "DATA_SOURCE", value = "s3" }
-    ]
+    # LLM_BASE_URL is injected when vLLM is enabled (from SSM parameter)
+    environment = concat(
+      [
+        { name = "S3_BUCKET", value = var.s3_bucket_name },
+        { name = "CHECKPOINT_INTERVAL", value = tostring(var.checkpoint_interval) },
+        { name = "DATA_SOURCE", value = "s3" }
+      ],
+      var.enable_vllm ? [
+        { name = "LLM_BASE_URL", value = data.aws_ssm_parameter.vllm_base_url[0].value }
+      ] : []
+    )
 
     # WRDS credentials injected from Secrets Manager
     secrets = [

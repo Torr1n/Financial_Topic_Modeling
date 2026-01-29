@@ -5,6 +5,7 @@ Tests are written BEFORE implementation (TDD).
 All tests use mocked API calls - no real network requests.
 """
 
+import os
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -551,3 +552,105 @@ class TestPromptContent:
         assert "Discussion of AI investments in cloud infrastructure" in prompt
         assert "Analysis of machine learning workload growth" in prompt
         assert "AI Infrastructure" in prompt
+
+
+# =============================================================================
+# Base URL Configuration Tests
+# =============================================================================
+
+class TestClientBaseURL:
+    """Tests for configurable base URL (vLLM support)."""
+
+    def test_default_base_url_is_xai(self):
+        """Default base URL should be xAI API."""
+        from cloud.src.llm import XAIClient
+        from cloud.src.llm.xai_client import DEFAULT_BASE_URL
+
+        # Ensure env var is not set
+        env_backup = os.environ.pop("LLM_BASE_URL", None)
+        try:
+            with patch('cloud.src.llm.xai_client.AsyncOpenAI'):
+                client = XAIClient(api_key="test_key", config={})
+                assert client._base_url == DEFAULT_BASE_URL
+                assert client._base_url == "https://api.x.ai/v1"
+        finally:
+            if env_backup:
+                os.environ["LLM_BASE_URL"] = env_backup
+
+    def test_env_var_overrides_default(self):
+        """LLM_BASE_URL env var should override default xAI URL."""
+        from cloud.src.llm import XAIClient
+
+        env_backup = os.environ.get("LLM_BASE_URL")
+        try:
+            os.environ["LLM_BASE_URL"] = "http://vllm.internal/v1"
+            with patch('cloud.src.llm.xai_client.AsyncOpenAI'):
+                client = XAIClient(api_key="dummy", config={})
+                assert client._base_url == "http://vllm.internal/v1"
+        finally:
+            if env_backup:
+                os.environ["LLM_BASE_URL"] = env_backup
+            else:
+                os.environ.pop("LLM_BASE_URL", None)
+
+    def test_config_overrides_env_var(self):
+        """Config base_url should take priority over env var."""
+        from cloud.src.llm import XAIClient
+
+        env_backup = os.environ.get("LLM_BASE_URL")
+        try:
+            os.environ["LLM_BASE_URL"] = "http://env-vllm.internal/v1"
+            with patch('cloud.src.llm.xai_client.AsyncOpenAI'):
+                client = XAIClient(
+                    api_key="test_key",
+                    config={"base_url": "http://config-vllm.internal/v1"}
+                )
+                assert client._base_url == "http://config-vllm.internal/v1"
+        finally:
+            if env_backup:
+                os.environ["LLM_BASE_URL"] = env_backup
+            else:
+                os.environ.pop("LLM_BASE_URL", None)
+
+    def test_base_url_passed_to_openai_client(self, sample_config):
+        """Base URL should be passed to AsyncOpenAI client."""
+        from cloud.src.llm import XAIClient
+
+        env_backup = os.environ.get("LLM_BASE_URL")
+        try:
+            os.environ["LLM_BASE_URL"] = "http://test-vllm.internal/v1"
+
+            with patch('cloud.src.llm.xai_client.AsyncOpenAI') as mock_openai:
+                client = XAIClient(api_key="test_key", config=sample_config)
+
+                # Verify AsyncOpenAI was called with correct base_url
+                mock_openai.assert_called_once()
+                call_kwargs = mock_openai.call_args.kwargs
+                assert call_kwargs["base_url"] == "http://test-vllm.internal/v1"
+        finally:
+            if env_backup:
+                os.environ["LLM_BASE_URL"] = env_backup
+            else:
+                os.environ.pop("LLM_BASE_URL", None)
+
+    def test_base_url_logged_on_init(self, sample_config, caplog):
+        """Base URL should be logged during initialization."""
+        from cloud.src.llm import XAIClient
+        import logging
+
+        env_backup = os.environ.get("LLM_BASE_URL")
+        try:
+            os.environ["LLM_BASE_URL"] = "http://logged-vllm.internal/v1"
+
+            with caplog.at_level(logging.INFO):
+                with patch('cloud.src.llm.xai_client.AsyncOpenAI'):
+                    client = XAIClient(api_key="test_key", config=sample_config)
+
+            # Check that base_url appears in log output
+            assert "http://logged-vllm.internal/v1" in caplog.text
+            assert "base_url=" in caplog.text
+        finally:
+            if env_backup:
+                os.environ["LLM_BASE_URL"] = env_backup
+            else:
+                os.environ.pop("LLM_BASE_URL", None)

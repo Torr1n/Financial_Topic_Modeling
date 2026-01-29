@@ -28,3 +28,9 @@ variable "checkpoint_interval" {
   type        = number
   default     = 50
 }
+
+variable "enable_vllm" {
+  description = "Enable vLLM integration (reads base URL from SSM, requires ECS module deployed first)"
+  type        = bool
+  default     = false
+}

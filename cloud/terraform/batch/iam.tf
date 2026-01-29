@@ -189,6 +189,30 @@ resource "aws_iam_role_policy" "batch_job_secrets" {
   })
 }
 
+# SSM Parameter Store access for vLLM configuration
+# Allows job to read vLLM base URL if deployed (optional)
+resource "aws_iam_role_policy" "batch_job_ssm" {
+  count = var.enable_vllm ? 1 : 0
+  name  = "ftm-batch-job-ssm"
+  role  = aws_iam_role.batch_job.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ftm/vllm/*"
+        ]
+      }
+    ]
+  })
+}
+
 # -----------------------------------------------------------------------------
 # BATCH INSTANCE ROLE - EC2 instances in compute environment
 # -----------------------------------------------------------------------------

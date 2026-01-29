@@ -52,3 +52,15 @@ data "aws_caller_identity" "current" {}
 
 # Get current region for ARN construction
 data "aws_region" "current" {}
+
+# -----------------------------------------------------------------------------
+# VLLM INTEGRATION - Read base URL from SSM (written by ECS module)
+# -----------------------------------------------------------------------------
+
+# Optional: vLLM base URL from ECS module
+# This allows Batch jobs to use self-hosted LLM instead of xAI API
+# If not deployed, jobs will fall back to XAI_API_KEY env var / xAI API
+data "aws_ssm_parameter" "vllm_base_url" {
+  count = var.enable_vllm ? 1 : 0
+  name  = "/ftm/vllm/base_url"
+}

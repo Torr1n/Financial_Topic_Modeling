@@ -5,14 +5,21 @@ Uses OpenAI-compatible API with:
 - Semaphore-based rate limiting
 - Exponential backoff retry logic
 - Graceful error handling with fallbacks
+- Configurable base URL (supports vLLM, xAI, or other OpenAI-compatible endpoints)
 
 Usage:
     client = XAIClient(api_key="your_key", config={"max_concurrent": 50})
     summary = await client.generate_topic_summary("ai, cloud, infrastructure")
+
+    # With vLLM:
+    import os
+    os.environ["LLM_BASE_URL"] = "http://vllm-alb.internal/v1"
+    client = XAIClient(api_key="dummy", config={})  # vLLM doesn't require API key
 """
 
 import asyncio
 import logging
+import os
 from typing import Dict, Any, List, Optional
 
 from openai import AsyncOpenAI, RateLimitError, APIStatusError, APITimeoutError, APIError
@@ -83,12 +90,17 @@ class XAIClient:
         Initialize the xAI client.
 
         Args:
-            api_key: xAI API key
+            api_key: xAI API key (can be "dummy" for vLLM which doesn't require auth)
             config: Optional configuration dict with keys:
-                - model: Model name (default: grok-beta)
+                - model: Model name (default: grok-4-1-fast-reasoning)
                 - max_concurrent: Max concurrent requests (default: 50)
                 - timeout: Request timeout in seconds (default: 30)
                 - max_retries: Max retry attempts (default: 3)
+                - base_url: Override API base URL (default: xAI API)
+
+        Environment Variables:
+            LLM_BASE_URL: If set, overrides the default base URL (xAI API).
+                          Config base_url takes priority over this env var.
         """
         config = config or {}
 
@@ -98,18 +110,25 @@ class XAIClient:
         self._timeout = config.get("timeout", DEFAULT_TIMEOUT)
         self._max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
 
+        # Base URL priority: config > env var > default (xAI)
+        self._base_url = config.get(
+            "base_url",
+            os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL)
+        )
+
         # Rate limiting semaphore
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
-        # OpenAI-compatible client for xAI
+        # OpenAI-compatible client (works with xAI, vLLM, or any compatible endpoint)
         self._client = AsyncOpenAI(
             api_key=api_key,
-            base_url=DEFAULT_BASE_URL,
+            base_url=self._base_url,
             timeout=self._timeout,
         )
 
         logger.info(
             f"XAIClient initialized: model={self._model}, "
+            f"base_url={self._base_url}, "
             f"max_concurrent={self._max_concurrent}, timeout={self._timeout}s"
         )
 
