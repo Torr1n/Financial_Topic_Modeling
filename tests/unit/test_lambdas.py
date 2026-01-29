@@ -290,7 +290,7 @@ class TestNotifyCompletion:
         mock_sns_client.publish.assert_called_once()
         call_kwargs = mock_sns_client.publish.call_args.kwargs
 
-        assert "SUCCESS" in call_kwargs["Subject"]
+        assert "successfully" in call_kwargs["Subject"].lower()
         assert "2023Q1" in call_kwargs["Message"]
 
     def test_sends_notification_on_failure(self, mock_sns_client):

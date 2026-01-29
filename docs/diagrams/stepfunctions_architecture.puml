@@ -1,0 +1,110 @@
+@startuml Step Functions Architecture
+!theme cerulean-outline
+skinparam backgroundColor #FEFEFE
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 11
+skinparam componentStyle rectangle
+
+title <size:18>**FTM Infrastructure Architecture**</size>\n<size:12>Sprint 5: Step Functions + vLLM Integration</size>\n
+
+' AWS Cloud boundary
+rectangle "**AWS Cloud** (us-east-1)" as aws #F5F5F5 {
+
+    ' Orchestration Layer
+    rectangle "**Orchestration Layer**" as orchestration #E3F2FD {
+        component "Step Functions\n**ftm-quarter-processor**" as sfn #BBDEFB
+
+        rectangle "Lambda Functions" as lambdas #E1F5FE {
+            component "prefetch-check" as lambda1 #B3E5FC
+            component "create-batch-manifest" as lambda2 #B3E5FC
+            component "notify-completion" as lambda3 #B3E5FC
+        }
+    }
+
+    ' Compute Layer
+    rectangle "**Compute Layer**" as compute #E8F5E9 {
+        rectangle "AWS Batch" as batch_box #C8E6C9 {
+            component "Job Queue\n**ftm-queue-main**" as queue #A5D6A7
+            component "Compute Env\n**ftm-gpu-spot**\n(g4dn/g5)" as compute_env #A5D6A7
+        }
+
+        rectangle "ECS Cluster" as ecs_box #C8E6C9 {
+            component "vLLM Service\n**Qwen3-8B**" as vllm #A5D6A7
+            component "Internal ALB" as alb #A5D6A7
+        }
+    }
+
+    ' Storage Layer
+    rectangle "**Storage Layer**" as storage #FFF3E0 {
+        database "S3 Bucket\n**ftm-pipeline-***" as s3 #FFE0B2 {
+            folder "prefetch/" as prefetch
+            folder "manifests/" as manifests
+            folder "intermediate/" as intermediate
+        }
+
+        component "SSM Parameter\n/ftm/vllm/base_url" as ssm #FFE0B2
+    }
+
+    ' Notification
+    rectangle "**Notifications**" as notify #FCE4EC {
+        component "SNS Topic" as sns #F8BBD9
+    }
+
+    ' Monitoring
+    rectangle "**Monitoring**" as monitoring #F3E5F5 {
+        component "CloudWatch\nLogs & Metrics" as cloudwatch #E1BEE7
+        component "X-Ray\nTracing" as xray #E1BEE7
+    }
+}
+
+' External
+actor "User/Scheduler" as user
+actor "Stakeholder" as stakeholder
+
+' Connections - Orchestration
+user --> sfn : Start Execution\n(quarter, bucket)
+
+sfn --> lambda1 : 1. Check prefetch
+sfn --> lambda2 : 2. Create manifest
+sfn --> lambda3 : 5. Notify completion
+
+lambda1 --> s3 : HEAD manifest.json
+lambda2 --> s3 : GET firm_ids\nPUT manifest.jsonl
+
+' Connections - Compute
+sfn --> queue : 3. Submit jobs\n(batch:submitJob.sync)
+queue --> compute_env : Schedule
+compute_env --> s3 : Read transcripts\nWrite topics
+compute_env --> alb : 4. LLM inference
+alb --> vllm : Forward requests
+
+' Connections - Config
+ssm --> compute_env : LLM_BASE_URL\n(env injection)
+
+' Connections - Notifications
+lambda3 --> sns : Publish
+sns --> stakeholder : Email/SMS
+
+' Connections - Monitoring
+sfn --> cloudwatch : Execution logs
+sfn --> xray : Traces
+compute_env --> cloudwatch : Job logs
+
+' Layout hints
+orchestration -[hidden]down- compute
+compute -[hidden]down- storage
+
+legend right
+    |= Component |= Purpose |
+    | Step Functions | Workflow orchestration |
+    | Lambda | Lightweight coordination |
+    | Batch | GPU compute (map phase) |
+    | ECS/vLLM | Self-hosted LLM |
+    | S3 | Data lake storage |
+    | SSM | Cross-module config |
+endlegend
+
+footer \nFTM Sprint 5 - AWS Architecture Overview
+@enduml

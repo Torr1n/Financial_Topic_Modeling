@@ -1,0 +1,70 @@
+@startuml Step Functions Executive View
+!theme cerulean-outline
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 15
+skinparam defaultFontName Arial
+skinparam defaultFontSize 14
+skinparam ArrowThickness 2
+
+title <size:20>**Quarter Processing Pipeline**</size>\n<size:14>Automated Multi-Firm Topic Analysis</size>\n
+
+' Simplified activity diagram for executive presentation
+start
+
+:<size:16>**1. Validate Data**</size>
+Check prefetch exists|
+note right
+  Ensures transcript data
+  is pre-loaded in S3
+end note
+
+if (Prefetch\nExists?) then (yes)
+else (no)
+    #FFCDD2:Fail: Run Prefetch First;
+    stop
+endif
+
+:<size:16>**2. Partition Work**</size>
+Create batch manifest|
+note right
+  Splits ~1000+ firms
+  into parallel batches
+end note
+
+:<size:16>**3. Process in Parallel**</size>
+Map over batches (5 concurrent)|
+partition "**GPU Processing**" {
+    #E8F5E9:Run Topic Modeling
+    on AWS Batch
+    (g4dn/g5 instances);
+}
+note right
+  Each batch processes
+  ~200 firms with BERTopic
+  + vLLM topic naming
+end note
+
+:<size:16>**4. Aggregate Results**</size>
+Count succeeded/failed|
+
+:<size:16>**5. Notify Stakeholders**</size>
+Send completion alert|
+note right
+  SNS notification with
+  processing summary
+end note
+
+stop
+
+legend right
+  |= Stage |= Duration |= Cost |
+  | Validate | <1 sec | ~$0 |
+  | Partition | <5 sec | ~$0 |
+  | Process | 2-5 hrs | ~$2-5 |
+  | Notify | <1 sec | ~$0 |
+  | **Total** | **2-5 hrs** | **~$2-5/qtr** |
+endlegend
+
+footer \n<size:10>Financial Topic Modeling - Sprint 5 Infrastructure</size>
+@enduml

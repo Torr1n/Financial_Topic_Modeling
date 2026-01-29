@@ -1,0 +1,136 @@
+@startuml Step Functions Quarter Processing Pipeline
+!theme cerulean-outline
+skinparam backgroundColor #FEFEFE
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 12
+
+title **Financial Topic Modeling**\n**Quarter Processing State Machine**\n
+
+' Color definitions
+skinparam state {
+    BackgroundColor<<lambda>> #E8F4FD
+    BorderColor<<lambda>> #1976D2
+    BackgroundColor<<choice>> #FFF8E1
+    BorderColor<<choice>> #FFA000
+    BackgroundColor<<batch>> #E8F5E9
+    BorderColor<<batch>> #388E3C
+    BackgroundColor<<fail>> #FFEBEE
+    BorderColor<<fail>> #D32F2F
+    BackgroundColor<<pass>> #F3E5F5
+    BorderColor<<pass>> #7B1FA2
+    BackgroundColor<<map>> #E0F7FA
+    BorderColor<<map>> #00838F
+}
+
+' Start
+[*] --> CheckPrefetch
+
+' Step 1: Check Prefetch
+state "**CheckPrefetch**" as CheckPrefetch <<lambda>> {
+    state "Lambda: ftm-prefetch-check" as check_inner
+    note right of check_inner
+        Verifies prefetch manifest
+        exists in S3 for quarter
+    end note
+}
+
+CheckPrefetch --> PrefetchExists
+
+' Step 2: Choice - Prefetch Exists?
+state "**PrefetchExists?**" as PrefetchExists <<choice>> {
+}
+
+PrefetchExists --> CreateBatchManifest : exists = true
+PrefetchExists --> PrefetchRequired : exists = false
+
+' Failure State
+state "**PrefetchRequired**" as PrefetchRequired <<fail>> {
+    state "Error: PrefetchRequiredError" as fail_inner
+    note right of fail_inner
+        Run prefetch first:
+        orchestrator.run_prefetch('quarter')
+    end note
+}
+PrefetchRequired --> [*]
+
+' Step 3: Create Batch Manifest
+state "**CreateBatchManifest**" as CreateBatchManifest <<lambda>> {
+    state "Lambda: ftm-create-batch-manifest" as manifest_inner
+    note right of manifest_inner
+        1. Read firm_ids from prefetch manifest
+        2. Create JSONL batch manifest
+        3. Return batch_ids (strings only)
+    end note
+}
+
+CreateBatchManifest --> ProcessBatches
+
+' Step 4: Map State - Process Batches
+state "**ProcessBatches**" as ProcessBatches <<map>> {
+    note right of ProcessBatches
+        **Map State**
+        MaxConcurrency: 5
+        Iterates over: batch_ids[]
+    end note
+
+    state "For each batch_id" as map_iterator {
+        [*] --> SubmitBatchJob
+
+        state "**SubmitBatchJob**" as SubmitBatchJob <<batch>> {
+            state "batch:submitJob.sync" as batch_inner
+            note right of batch_inner
+                AWS Batch Job
+                Job: ftm-firm-processor
+                Waits for completion
+            end note
+        }
+
+        SubmitBatchJob --> [*] : Success
+        SubmitBatchJob --> JobFailed : Error
+
+        state "**JobFailed**" as JobFailed <<fail>> {
+            state "Capture error details" as job_fail_inner
+        }
+        JobFailed --> [*]
+    }
+}
+
+ProcessBatches --> CountResults
+
+' Step 5: Count Results
+state "**CountResults**" as CountResults <<pass>> {
+    state "Pass: Aggregate batch results" as count_inner
+    note right of count_inner
+        Collects succeeded/failed
+        counts for notification
+    end note
+}
+
+CountResults --> NotifyCompletion
+
+' Step 6: Notify Completion
+state "**NotifyCompletion**" as NotifyCompletion <<lambda>> {
+    state "Lambda: ftm-notify-completion" as notify_inner
+    note right of notify_inner
+        Sends SNS notification
+        with processing summary
+    end note
+}
+
+NotifyCompletion --> [*]
+
+' Legend
+legend right
+    |= Symbol |= Description |
+    | <#E8F4FD> Lambda | AWS Lambda Function |
+    | <#FFF8E1> Choice | Conditional Branch |
+    | <#E8F5E9> Batch | AWS Batch Job (sync) |
+    | <#E0F7FA> Map | Parallel Iteration |
+    | <#F3E5F5> Pass | Data Transformation |
+    | <#FFEBEE> Fail | Error/Termination |
+endlegend
+
+footer \nFTM Sprint 5 - Step Functions Orchestration\nGenerated for stakeholder review
+@enduml
