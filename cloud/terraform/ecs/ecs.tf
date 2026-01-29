@@ -40,13 +40,17 @@ resource "aws_ecs_task_definition" "vllm" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
-  # Note: cpu/memory not required for host network mode on EC2, but helps with scheduling
+  # Note: For host network mode, cpu/memory must be in container definition, not task level
 
   container_definitions = jsonencode([
     {
       name      = "vllm"
       image     = "vllm/vllm-openai:latest"
       essential = true
+
+      # Memory reservation for container scheduling (host network mode)
+      memory            = var.container_memory
+      memoryReservation = 12000  # Soft limit, allows burst
 
       # vLLM command with model configuration
       command = [

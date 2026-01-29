@@ -101,7 +101,7 @@ resource "aws_lb" "vllm" {
 # TARGET GROUP - vLLM tasks
 # -----------------------------------------------------------------------------
 resource "aws_lb_target_group" "vllm" {
-  name        = "ftm-vllm-tg"
+  name        = "ftm-vllm-tg2"  # Renamed to force recreation (can't change target_type in place)
   port        = var.vllm_port
   protocol    = "HTTP"
   vpc_id      = data.aws_vpc.default.id
@@ -120,6 +120,11 @@ resource "aws_lb_target_group" "vllm" {
 
   # Long deregistration delay for graceful shutdown
   deregistration_delay = 60
+
+  # Create new target group before destroying old one
+  lifecycle {
+    create_before_destroy = true
+  }
 
   tags = {
     Name    = "ftm-vllm-tg"
