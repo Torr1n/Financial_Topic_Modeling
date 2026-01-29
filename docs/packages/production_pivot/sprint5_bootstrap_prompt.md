@@ -77,7 +77,7 @@ Batch Job → S3TranscriptConnector → manifest → selective chunks → FirmPr
 1. **ECS Task Definition for vLLM**
    - Qwen3-8B model (fits on g5.xlarge)
    - OpenAI-compatible API endpoint
-   - Terraform in `cloud/terraform/ecs_vllm.tf`
+   - Terraform in `cloud/terraform/ecs/`
 
 2. **xai_client.py Base URL Switch**
    - Add `LLM_BASE_URL` environment variable

@@ -141,10 +141,9 @@ resource "aws_ecs_service" "vllm" {
   # Allow task to be replaced when task definition changes
   force_new_deployment = true
 
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 50
-  }
+  # Deployment settings (top-level in AWS provider 5.x)
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 50
 
   # Wait for ALB target group before starting service
   depends_on = [
