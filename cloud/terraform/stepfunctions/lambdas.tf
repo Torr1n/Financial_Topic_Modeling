@@ -77,6 +77,35 @@ resource "aws_lambda_function" "create_batch_manifest" {
 }
 
 # -----------------------------------------------------------------------------
+# LAMBDA: Summarize Results
+# -----------------------------------------------------------------------------
+data "archive_file" "summarize_results" {
+  type        = "zip"
+  source_file = "${path.module}/../../src/lambdas/summarize_results.py"
+  output_path = "${path.module}/builds/summarize_results.zip"
+}
+
+resource "aws_lambda_function" "summarize_results" {
+  function_name = "ftm-summarize-results"
+  description   = "Count succeeded/failed batches from Map state output"
+
+  filename         = data.archive_file.summarize_results.output_path
+  source_code_hash = data.archive_file.summarize_results.output_base64sha256
+
+  handler     = "summarize_results.handler"
+  runtime     = "python3.11"
+  timeout     = var.lambda_timeout
+  memory_size = var.lambda_memory_size
+
+  role = aws_iam_role.lambda_execution.arn
+
+  tags = {
+    Name    = "ftm-summarize-results"
+    Project = "financial-topic-modeling"
+  }
+}
+
+# -----------------------------------------------------------------------------
 # LAMBDA: Notify Completion
 # -----------------------------------------------------------------------------
 data "archive_file" "notify_completion" {
@@ -130,6 +159,16 @@ resource "aws_cloudwatch_log_group" "create_batch_manifest" {
 
   tags = {
     Name    = "ftm-create-batch-manifest-logs"
+    Project = "financial-topic-modeling"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "summarize_results" {
+  name              = "/aws/lambda/ftm-summarize-results"
+  retention_in_days = 14
+
+  tags = {
+    Name    = "ftm-summarize-results-logs"
     Project = "financial-topic-modeling"
   }
 }

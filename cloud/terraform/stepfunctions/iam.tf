@@ -125,6 +125,7 @@ resource "aws_iam_role_policy" "sfn_lambda" {
         Resource = [
           aws_lambda_function.prefetch_check.arn,
           aws_lambda_function.create_batch_manifest.arn,
+          aws_lambda_function.summarize_results.arn,
           aws_lambda_function.notify_completion.arn
         ]
       }

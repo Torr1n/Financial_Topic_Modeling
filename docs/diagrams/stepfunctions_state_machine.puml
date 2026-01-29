@@ -22,6 +22,8 @@ skinparam state {
     BorderColor<<pass>> #7B1FA2
     BackgroundColor<<map>> #E0F7FA
     BorderColor<<map>> #00838F
+    BackgroundColor<<success>> #E8F5E9
+    BorderColor<<success>> #2E7D32
 }
 
 ' Start
@@ -45,7 +47,7 @@ state "**PrefetchExists?**" as PrefetchExists <<choice>> {
 PrefetchExists --> CreateBatchManifest : exists = true
 PrefetchExists --> PrefetchRequired : exists = false
 
-' Failure State
+' Failure State - Prefetch Required
 state "**PrefetchRequired**" as PrefetchRequired <<fail>> {
     state "Error: PrefetchRequiredError" as fail_inner
     note right of fail_inner
@@ -97,18 +99,18 @@ state "**ProcessBatches**" as ProcessBatches <<map>> {
     }
 }
 
-ProcessBatches --> CountResults
+ProcessBatches --> SummarizeResults
 
-' Step 5: Count Results
-state "**CountResults**" as CountResults <<pass>> {
-    state "Pass: Aggregate batch results" as count_inner
-    note right of count_inner
-        Collects succeeded/failed
-        counts for notification
+' Step 5: Summarize Results
+state "**SummarizeResults**" as SummarizeResults <<lambda>> {
+    state "Lambda: ftm-summarize-results" as summary_inner
+    note right of summary_inner
+        Counts succeeded/failed
+        from Map state output
     end note
 }
 
-CountResults --> NotifyCompletion
+SummarizeResults --> NotifyCompletion
 
 ' Step 6: Notify Completion
 state "**NotifyCompletion**" as NotifyCompletion <<lambda>> {
@@ -119,7 +121,25 @@ state "**NotifyCompletion**" as NotifyCompletion <<lambda>> {
     end note
 }
 
-NotifyCompletion --> [*]
+NotifyCompletion --> CheckForFailures
+
+' Step 7: Check for Failures
+state "**CheckForFailures**" as CheckForFailures <<choice>> {
+}
+
+CheckForFailures --> QuarterCompletedWithFailures : has_failures = true
+CheckForFailures --> QuarterCompletedSuccessfully : has_failures = false
+
+' Final States
+state "**QuarterCompletedWithFailures**" as QuarterCompletedWithFailures <<fail>> {
+    state "Error: BatchJobFailures" as batch_fail
+}
+QuarterCompletedWithFailures --> [*]
+
+state "**QuarterCompletedSuccessfully**" as QuarterCompletedSuccessfully <<success>> {
+    state "All batches succeeded" as success_inner
+}
+QuarterCompletedSuccessfully --> [*]
 
 ' Legend
 legend right
@@ -128,8 +148,8 @@ legend right
     | <#FFF8E1> Choice | Conditional Branch |
     | <#E8F5E9> Batch | AWS Batch Job (sync) |
     | <#E0F7FA> Map | Parallel Iteration |
-    | <#F3E5F5> Pass | Data Transformation |
     | <#FFEBEE> Fail | Error/Termination |
+    | <#E8F5E9> Succeed | Success Termination |
 endlegend
 
 footer \nFTM Sprint 5 - Step Functions Orchestration\nGenerated for stakeholder review

@@ -45,13 +45,31 @@ output "alb_security_group_id" {
   value       = aws_security_group.vllm_alb.id
 }
 
-# Helper commands for managing vLLM service
-output "scale_down_command" {
-  description = "Command to scale down vLLM service to save costs"
-  value       = "aws ecs update-service --cluster ${aws_ecs_cluster.vllm.name} --service ${aws_ecs_service.vllm.name} --desired-count 0"
-}
+# =============================================================================
+# MANUAL SCALING COMMANDS
+# Scaling is intentionally manual - no auto-scaling configured.
+# Run scale_up before batch processing, scale_down after to save costs.
+# =============================================================================
 
 output "scale_up_command" {
-  description = "Command to scale up vLLM service for processing"
-  value       = "aws ecs update-service --cluster ${aws_ecs_cluster.vllm.name} --service ${aws_ecs_service.vllm.name} --desired-count 1"
+  description = "Command to scale up vLLM for processing (run before batch jobs)"
+  value       = <<-EOT
+    # Scale up ECS service AND ASG
+    aws ecs update-service --cluster ${aws_ecs_cluster.vllm.name} --service ${aws_ecs_service.vllm.name} --desired-count 1 && \
+    aws autoscaling set-desired-capacity --auto-scaling-group-name ${aws_autoscaling_group.vllm.name} --desired-capacity 1
+  EOT
+}
+
+output "scale_down_command" {
+  description = "Command to scale down vLLM to save costs (run after batch jobs)"
+  value       = <<-EOT
+    # Scale down ECS service AND ASG (both required to stop costs)
+    aws ecs update-service --cluster ${aws_ecs_cluster.vllm.name} --service ${aws_ecs_service.vllm.name} --desired-count 0 && \
+    aws autoscaling set-desired-capacity --auto-scaling-group-name ${aws_autoscaling_group.vllm.name} --desired-capacity 0
+  EOT
+}
+
+output "asg_name" {
+  description = "Auto Scaling Group name (for manual scaling)"
+  value       = aws_autoscaling_group.vllm.name
 }

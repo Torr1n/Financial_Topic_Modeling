@@ -1,5 +1,7 @@
-# Financial Topic Modeling - ECS Auto Scaling and Capacity Provider for vLLM
+# Financial Topic Modeling - ECS Capacity Provider for vLLM
 # GPU instances with Spot pricing
+# NOTE: Scaling is MANUAL - no auto-scaling configured
+# Use scale_up_command/scale_down_command from outputs to manage capacity
 
 # -----------------------------------------------------------------------------
 # LAUNCH TEMPLATE - GPU instances for vLLM
@@ -156,12 +158,10 @@ resource "aws_autoscaling_group" "vllm" {
         version            = "$Latest"
       }
 
+      # g5.xlarge only for now - Qwen3-8B verified to fit
+      # Add g4dn.xlarge later after confirming model fits in 16GB T4 memory
       override {
         instance_type = "g5.xlarge"
-      }
-
-      override {
-        instance_type = "g4dn.xlarge"
       }
     }
   }

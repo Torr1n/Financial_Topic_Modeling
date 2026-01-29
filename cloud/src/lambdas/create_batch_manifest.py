@@ -158,7 +158,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     quarter = event.get("quarter")
     bucket = event.get("bucket") or os.environ.get("S3_BUCKET")
-    batch_size = event.get("batch_size", DEFAULT_BATCH_SIZE)
+    # Guard against None/missing batch_size - use default if falsy
+    batch_size = event.get("batch_size") or DEFAULT_BATCH_SIZE
 
     if not quarter:
         raise ValueError("Missing required field: quarter")

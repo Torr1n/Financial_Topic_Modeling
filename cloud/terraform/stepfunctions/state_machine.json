@@ -5,10 +5,7 @@
     "CheckPrefetch": {
       "Type": "Task",
       "Resource": "${prefetch_check_arn}",
-      "Parameters": {
-        "quarter.$": "$.quarter",
-        "bucket.$": "$.bucket"
-      },
+      "InputPath": "$",
       "ResultPath": "$.prefetch_result",
       "Next": "PrefetchExists?"
     },
@@ -31,11 +28,8 @@
     "CreateBatchManifest": {
       "Type": "Task",
       "Resource": "${create_batch_manifest_arn}",
-      "Parameters": {
-        "quarter.$": "$.quarter",
-        "bucket.$": "$.bucket",
-        "batch_size.$": "$.batch_size"
-      },
+      "Comment": "batch_size is optional - Lambda defaults to 1000 if not provided",
+      "InputPath": "$",
       "ResultPath": "$.manifest_result",
       "Next": "ProcessBatches"
     },
@@ -113,10 +107,11 @@
         }
       },
       "ResultPath": "$.batch_results",
-      "Next": "CountResults"
+      "Next": "SummarizeResults"
     },
-    "CountResults": {
-      "Type": "Pass",
+    "SummarizeResults": {
+      "Type": "Task",
+      "Resource": "${summarize_results_arn}",
       "Parameters": {
         "quarter.$": "$.quarter",
         "bucket.$": "$.bucket",
@@ -124,6 +119,7 @@
         "total_batches.$": "$.manifest_result.n_batches",
         "execution_name.$": "$$.Execution.Name"
       },
+      "ResultPath": "$.summary",
       "Next": "NotifyCompletion"
     },
     "NotifyCompletion": {
@@ -131,13 +127,32 @@
       "Resource": "${notify_completion_arn}",
       "Parameters": {
         "quarter.$": "$.quarter",
-        "total_batches.$": "$.total_batches",
-        "execution_name.$": "$.execution_name",
-        "succeeded.$": "States.ArrayLength(States.ArrayPartition($.batch_results, 1))",
-        "failed": 0
+        "succeeded.$": "$.summary.succeeded",
+        "failed.$": "$.summary.failed",
+        "total_batches.$": "$.summary.total_batches",
+        "execution_name.$": "$.summary.execution_name"
       },
       "ResultPath": "$.notification_result",
-      "End": true
+      "Next": "CheckForFailures"
+    },
+    "CheckForFailures": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.summary.has_failures",
+          "BooleanEquals": true,
+          "Next": "QuarterCompletedWithFailures"
+        }
+      ],
+      "Default": "QuarterCompletedSuccessfully"
+    },
+    "QuarterCompletedWithFailures": {
+      "Type": "Fail",
+      "Error": "BatchJobFailures",
+      "Cause": "One or more batch jobs failed. Check CloudWatch logs for details."
+    },
+    "QuarterCompletedSuccessfully": {
+      "Type": "Succeed"
     }
   }
 }

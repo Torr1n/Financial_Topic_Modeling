@@ -281,6 +281,16 @@ Quarter 3:                           [=== MAP ===][= REDUCE =]
 
 **Implementation**: Step Functions parallel states or separate state machine invocations.
 
+### Operational Note: Manual Scaling During Runs (2026-01-29)
+
+For early production runs, keep vLLM **manually scaled** rather than relying on autoscaling. The pipeline is scheduled and batch‑oriented, so predictability matters more than elasticity. Manual scaling keeps vLLM warm throughout a run, avoids cold‑start stalls, and reduces operational complexity.
+
+**Recommended approach:**
+- Set **min_capacity = 1** during runs (vLLM stays warm)
+- Scale down to 0 **after** runs to save costs (manual or a simple post‑run step)
+
+Autoscaling can be reintroduced later if/when we need dynamic concurrency management.
+
 ### Warm-Up Lambda
 Before starting the first batch job, ensure vLLM is warm:
 ```python

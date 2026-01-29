@@ -2,22 +2,36 @@
 # Accessed by Batch jobs, not exposed to internet
 
 # -----------------------------------------------------------------------------
+# DATA SOURCE - Reference Batch security group (created by batch module)
+# -----------------------------------------------------------------------------
+data "aws_security_group" "batch" {
+  filter {
+    name   = "group-name"
+    values = ["ftm-batch-sg"]
+  }
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# -----------------------------------------------------------------------------
 # SECURITY GROUPS
 # -----------------------------------------------------------------------------
 
-# ALB Security Group - Allows inbound from Batch instances
+# ALB Security Group - Allows inbound from Batch SG only (least privilege)
 resource "aws_security_group" "vllm_alb" {
   name        = "ftm-vllm-alb-sg"
   description = "Security group for vLLM ALB"
   vpc_id      = data.aws_vpc.default.id
 
-  # Inbound: Allow HTTP from VPC (Batch instances)
+  # Inbound: Allow HTTP from Batch SG only (not entire VPC)
   ingress {
-    description = "HTTP from VPC"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.default.cidr_block]
+    description     = "HTTP from Batch instances"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [data.aws_security_group.batch.id]
   }
 
   # Outbound: Allow all (needed to reach vLLM tasks)

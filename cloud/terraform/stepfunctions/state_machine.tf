@@ -23,6 +23,7 @@ resource "aws_sfn_state_machine" "quarter_processor" {
   definition = templatefile("${path.module}/state_machine.json", {
     prefetch_check_arn        = aws_lambda_function.prefetch_check.arn
     create_batch_manifest_arn = aws_lambda_function.create_batch_manifest.arn
+    summarize_results_arn     = aws_lambda_function.summarize_results.arn
     notify_completion_arn     = aws_lambda_function.notify_completion.arn
     job_queue_arn             = data.aws_batch_job_queue.main.arn
     job_definition_arn        = data.aws_batch_job_definition.firm_processor.arn

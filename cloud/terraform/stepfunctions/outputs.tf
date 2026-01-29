@@ -20,6 +20,11 @@ output "create_batch_manifest_lambda_arn" {
   value       = aws_lambda_function.create_batch_manifest.arn
 }
 
+output "summarize_results_lambda_arn" {
+  description = "Summarize results Lambda function ARN"
+  value       = aws_lambda_function.summarize_results.arn
+}
+
 output "notify_completion_lambda_arn" {
   description = "Notify completion Lambda function ARN"
   value       = aws_lambda_function.notify_completion.arn

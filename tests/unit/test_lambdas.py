@@ -258,6 +258,108 @@ class TestCreateBatchManifest:
 
 
 # =============================================================================
+# Summarize Results Tests
+# =============================================================================
+
+class TestSummarizeResults:
+    """Tests for summarize_results Lambda function."""
+
+    def test_counts_all_succeeded(self):
+        """Should count all succeeded when no failures."""
+        from cloud.src.lambdas.summarize_results import handler
+
+        batch_results = [
+            {"batch_id": "2023Q1_batch_0000", "job_result": {"Status": "SUCCEEDED"}},
+            {"batch_id": "2023Q1_batch_0001", "job_result": {"Status": "SUCCEEDED"}},
+            {"batch_id": "2023Q1_batch_0002", "job_result": {"Status": "SUCCEEDED"}},
+        ]
+
+        result = handler(
+            {
+                "quarter": "2023Q1",
+                "bucket": "test-bucket",
+                "batch_results": batch_results,
+                "total_batches": 3,
+                "execution_name": "test-exec",
+            },
+            None
+        )
+
+        assert result["succeeded"] == 3
+        assert result["failed"] == 0
+        assert result["has_failures"] is False
+
+    def test_counts_failures_from_job_failed_state(self):
+        """Should count failures from JobFailed pass state."""
+        from cloud.src.lambdas.summarize_results import handler
+
+        batch_results = [
+            {"batch_id": "2023Q1_batch_0000", "job_result": {"Status": "SUCCEEDED"}},
+            {"batch_id": "2023Q1_batch_0001", "status": "FAILED", "error": {"Error": "SomeError"}},
+            {"batch_id": "2023Q1_batch_0002", "job_result": {"Status": "SUCCEEDED"}},
+        ]
+
+        result = handler(
+            {
+                "quarter": "2023Q1",
+                "bucket": "test-bucket",
+                "batch_results": batch_results,
+                "total_batches": 3,
+            },
+            None
+        )
+
+        assert result["succeeded"] == 2
+        assert result["failed"] == 1
+        assert result["has_failures"] is True
+        assert len(result["failure_details"]) == 1
+        assert result["failure_details"][0]["batch_id"] == "2023Q1_batch_0001"
+
+    def test_counts_mixed_job_statuses(self):
+        """Should handle various job status values."""
+        from cloud.src.lambdas.summarize_results import handler
+
+        batch_results = [
+            {"batch_id": "batch_0", "job_result": {"Status": "SUCCEEDED"}},
+            {"batch_id": "batch_1", "job_result": {"Status": "FAILED"}},
+            {"batch_id": "batch_2", "status": "FAILED", "error": {}},
+        ]
+
+        result = handler({"batch_results": batch_results}, None)
+
+        assert result["succeeded"] == 1
+        assert result["failed"] == 2
+
+    def test_returns_failure_details(self):
+        """Should include failure details when failures exist."""
+        from cloud.src.lambdas.summarize_results import handler
+
+        batch_results = [
+            {
+                "batch_id": "2023Q1_batch_0001",
+                "status": "FAILED",
+                "error": {"Error": "Batch.JobFailed", "Cause": "Container exited with code 1"}
+            },
+        ]
+
+        result = handler({"batch_results": batch_results}, None)
+
+        assert result["failure_details"] is not None
+        assert result["failure_details"][0]["batch_id"] == "2023Q1_batch_0001"
+        assert "error" in result["failure_details"][0]
+
+    def test_handles_empty_batch_results(self):
+        """Should handle empty batch results gracefully."""
+        from cloud.src.lambdas.summarize_results import handler
+
+        result = handler({"batch_results": [], "quarter": "2023Q1"}, None)
+
+        assert result["succeeded"] == 0
+        assert result["failed"] == 0
+        assert result["has_failures"] is False
+
+
+# =============================================================================
 # Notify Completion Tests
 # =============================================================================
 
