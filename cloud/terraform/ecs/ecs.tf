@@ -125,8 +125,9 @@ resource "aws_ecs_service" "vllm" {
   launch_type = "EC2"
 
   network_configuration {
-    subnets         = data.aws_subnets.default.ids
-    security_groups = [aws_security_group.vllm_task.id]
+    subnets          = data.aws_subnets.default.ids
+    security_groups  = [aws_security_group.vllm_task.id]
+    assign_public_ip = true  # Required for HuggingFace model download (no NAT in default VPC)
   }
 
   load_balancer {
