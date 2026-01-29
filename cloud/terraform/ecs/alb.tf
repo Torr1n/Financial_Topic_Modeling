@@ -105,7 +105,7 @@ resource "aws_lb_target_group" "vllm" {
   port        = var.vllm_port
   protocol    = "HTTP"
   vpc_id      = data.aws_vpc.default.id
-  target_type = "ip"  # Required for awsvpc network mode
+  target_type = "instance"  # Required for host network mode
 
   health_check {
     enabled             = true

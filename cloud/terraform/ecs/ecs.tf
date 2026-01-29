@@ -36,13 +36,11 @@ resource "aws_ecs_cluster" "vllm" {
 resource "aws_ecs_task_definition" "vllm" {
   family                   = "ftm-vllm"
   requires_compatibilities = ["EC2"]
-  network_mode             = "awsvpc"
+  network_mode             = "host"  # Use host network for internet access (HuggingFace downloads)
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
-  # GPU requirement
-  cpu    = var.container_cpu
-  memory = var.container_memory
+  # Note: cpu/memory not required for host network mode on EC2, but helps with scheduling
 
   container_definitions = jsonencode([
     {
@@ -124,11 +122,8 @@ resource "aws_ecs_service" "vllm" {
   # Use EC2 launch type for GPU support
   launch_type = "EC2"
 
-  network_configuration {
-    subnets          = data.aws_subnets.default.ids
-    security_groups  = [aws_security_group.vllm_task.id]
-    assign_public_ip = true  # Required for HuggingFace model download (no NAT in default VPC)
-  }
+  # Note: Using host network mode, so no network_configuration block needed
+  # The task uses the EC2 instance's network directly (has public IP for HuggingFace access)
 
   load_balancer {
     target_group_arn = aws_lb_target_group.vllm.arn
