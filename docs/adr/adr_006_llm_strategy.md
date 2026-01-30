@@ -205,7 +205,8 @@ That's it. The rest of the client code (prompts, retry logic, batching) remains 
 resource "aws_ecs_task_definition" "vllm" {
   family                   = "ftm-vllm"
   requires_compatibilities = ["EC2"]
-  network_mode             = "awsvpc"
+  # Host networking for direct internet access (HuggingFace model downloads)
+  network_mode             = "host"
 
   container_definitions = jsonencode([{
     name  = "vllm"
@@ -213,10 +214,14 @@ resource "aws_ecs_task_definition" "vllm" {
 
     command = [
       "--model", "Qwen/Qwen3-8B",
-      "--host", "0.0.0.0",
       "--port", "8000",
-      "--tensor-parallel-size", "1"
+      "--trust-remote-code",
+      "--max-model-len", "4096"
     ]
+
+    # Host network mode: set memory at container level
+    memory            = 14000
+    memoryReservation = 12000
 
     resourceRequirements = [{
       type  = "GPU"
@@ -229,24 +234,26 @@ resource "aws_ecs_task_definition" "vllm" {
       protocol      = "tcp"
     }]
 
-    environment = [
-      { name = "HF_TOKEN", value = var.huggingface_token }
-    ]
+    # Optional: add HF_TOKEN if model access requires it
+    # environment = [
+    #   { name = "HF_TOKEN", value = var.huggingface_token }
+    # ]
 
     logConfiguration = {
       logDriver = "awslogs"
       options = {
-        "awslogs-group"         = "/aws/ecs/ftm-vllm"
+        "awslogs-group"         = "/ecs/ftm-vllm"
         "awslogs-region"        = var.aws_region
         "awslogs-stream-prefix" = "vllm"
       }
     }
   }])
-
-  cpu    = 4096
-  memory = 30720  # 30GB for 8B model
 }
 ```
+
+**Host network implications:** one vLLM task per instance (fixed port 8000). Scaling happens by increasing
+ASG/desired count (one task per instance) rather than running multiple tasks on a single host. The ALB target
+group uses `target_type = "instance"` to match host networking.
 
 ### Health Check Pattern
 ```python
