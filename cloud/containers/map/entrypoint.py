@@ -342,16 +342,22 @@ def flatten_to_parquet_rows(
     """
     rows = []
 
+    firm_id = firm_output["firm_id"]
     for topic in firm_output.get("topics", []):
+        # topic_id is composite string per ADR-007: {firm_id}_{local_topic_id}
+        local_topic_id = topic["topic_id"]
+        composite_topic_id = f"{firm_id}_{local_topic_id}"
+
         rows.append(
             {
-                "firm_id": firm_output["firm_id"],
+                "firm_id": firm_id,
                 "firm_name": firm_output["firm_name"],
                 "quarter": quarter,  # Include for downstream tooling
                 "permno": firm_metadata.get("permno"),
                 "gvkey": firm_metadata.get("gvkey"),
                 "earnings_call_date": firm_metadata.get("earnings_call_date"),
-                "topic_id": topic["topic_id"],
+                "topic_id": composite_topic_id,
+                "local_topic_id": local_topic_id,  # Preserve for BERTopic reference
                 "representation": topic["representation"],
                 "summary": topic.get("summary", ""),  # LLM-generated summary
                 "keywords": topic["keywords"],
@@ -399,7 +405,7 @@ def write_parquet_chunk(
 
 
 async def generate_topic_summaries(
-    llm_client: XAIClient,
+    llm_config: Dict[str, Any],
     firm_output: Dict[str, Any],
     sentences: List,  # TranscriptSentence objects
     firm_id: str,
@@ -407,8 +413,11 @@ async def generate_topic_summaries(
     """
     Add LLM summaries to each topic, fallback to representation on failure.
 
+    IMPORTANT: XAIClient must be created inside async function to avoid
+    event loop issues (Semaphore binds to current loop on creation).
+
     Args:
-        llm_client: Initialized XAIClient
+        llm_config: Dict with base_url, model, max_concurrent, timeout
         firm_output: Output dict from FirmProcessor.process()
         sentences: List of TranscriptSentence objects from firm_data
         firm_id: Firm identifier for logging
@@ -416,6 +425,12 @@ async def generate_topic_summaries(
     Returns:
         firm_output dict with 'summary' field added to each topic
     """
+    # Create XAIClient inside async context to avoid event loop issues
+    llm_client = XAIClient(
+        api_key="dummy",  # vLLM doesn't require auth
+        config=llm_config,
+    )
+
     # Build sentence lookup by ID
     sentence_map = {s.sentence_id: s.cleaned_text for s in sentences}
 
@@ -467,7 +482,7 @@ def process_firms(
     last_chunk_id: int,
     checkpoint_interval: int,
     circuit_breaker: CircuitBreakerConfig,
-    llm_client: Optional[XAIClient] = None,
+    llm_config: Optional[Dict[str, Any]] = None,
 ) -> ProcessingResult:
     """
     Process firms with checkpointing, failure tracking, and circuit breaker.
@@ -486,7 +501,7 @@ def process_firms(
         last_chunk_id: Last chunk ID from checkpoint (for restart consistency)
         checkpoint_interval: Firms per checkpoint
         circuit_breaker: Circuit breaker configuration for failure thresholds
-        llm_client: Optional XAIClient for generating topic summaries
+        llm_config: Optional LLM config dict for generating topic summaries
 
     Returns:
         ProcessingResult with completed, skipped, and failed firms
@@ -547,11 +562,11 @@ def process_firms(
             # Process with FirmProcessor
             output, _ = processor.process(firm_data, embeddings=embeddings)
 
-            # Generate LLM summaries if client available
-            if llm_client is not None:
+            # Generate LLM summaries if configured
+            if llm_config is not None:
                 try:
                     output = asyncio.run(generate_topic_summaries(
-                        llm_client, output, firm_data.sentences, firm_id
+                        llm_config, output, firm_data.sentences, firm_id
                     ))
                 except Exception as e:
                     logger.warning(f"LLM summary generation failed for {firm_id}: {e}")
@@ -727,27 +742,21 @@ def main():
     processor = FirmProcessor(topic_model, config)
     logger.info("Topic model and processor initialized")
 
-    # Initialize LLM client if configured
+    # Configure LLM if available (client created inside async context to avoid event loop issues)
     llm_base_url = os.environ.get("LLM_BASE_URL")
     llm_model_name = os.environ.get("LLM_MODEL_NAME", "Qwen/Qwen3-8B")
     llm_concurrency = int(os.environ.get("LLM_MAX_CONCURRENT", "10"))
-    llm_client = None
+    llm_config = None
     if llm_base_url:
-        try:
-            llm_client = XAIClient(
-                api_key="dummy",  # vLLM doesn't require auth
-                config={
-                    "model": llm_model_name,
-                    "max_concurrent": llm_concurrency,
-                    "timeout": 60,  # Longer timeout for batch inference
-                }
-            )
-            logger.info(
-                f"LLM client initialized: base_url={llm_base_url}, "
-                f"model={llm_model_name}, concurrency={llm_concurrency}"
-            )
-        except Exception as e:
-            logger.warning(f"LLM client initialization failed, continuing without LLM: {e}")
+        llm_config = {
+            "model": llm_model_name,
+            "max_concurrent": llm_concurrency,
+            "timeout": 60,  # Longer timeout for batch inference
+        }
+        logger.info(
+            f"LLM configured: base_url={llm_base_url}, "
+            f"model={llm_model_name}, concurrency={llm_concurrency}"
+        )
     else:
         logger.info("LLM_BASE_URL not set, topic summaries will use keyword representation")
 
@@ -772,7 +781,7 @@ def main():
             last_chunk_id=last_chunk_id,
             checkpoint_interval=checkpoint_interval,
             circuit_breaker=circuit_breaker,
-            llm_client=llm_client,
+            llm_config=llm_config,
         )
     finally:
         connector.close()

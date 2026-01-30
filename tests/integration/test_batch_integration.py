@@ -349,6 +349,7 @@ class TestParquetSchema:
                 {
                     "topic_id": 0,
                     "representation": "ai machine learning",
+                    "summary": "Discussion of AI and ML initiatives",
                     "keywords": ["ai", "machine", "learning"],
                     "size": 10,
                     "sentence_ids": ["123456_T1_0001", "123456_T1_0002"],
@@ -356,6 +357,7 @@ class TestParquetSchema:
                 {
                     "topic_id": 1,
                     "representation": "revenue growth",
+                    "summary": "Analysis of revenue growth trends",
                     "keywords": ["revenue", "growth"],
                     "size": 8,
                     "sentence_ids": ["123456_T1_0003"],
@@ -380,12 +382,14 @@ class TestParquetSchema:
         row0 = rows[0]
         assert row0["firm_id"] == "123456"
         assert row0["firm_name"] == "Test Corp."
-        assert row0["quarter"] == "2024Q1"  # New field
+        assert row0["quarter"] == "2024Q1"
         assert row0["permno"] == 12345
         assert row0["gvkey"] == "001234"
         assert row0["earnings_call_date"] == date(2024, 1, 10)
-        assert row0["topic_id"] == 0
+        assert row0["topic_id"] == "123456_0"  # Composite: {firm_id}_{local_topic_id}
+        assert row0["local_topic_id"] == 0
         assert row0["representation"] == "ai machine learning"
+        assert row0["summary"] == "Discussion of AI and ML initiatives"
         assert row0["keywords"] == ["ai", "machine", "learning"]
         assert row0["n_sentences"] == 10
         assert row0["sentence_ids"] == ["123456_T1_0001", "123456_T1_0002"]
@@ -393,8 +397,10 @@ class TestParquetSchema:
 
         # Verify second row
         row1 = rows[1]
-        assert row1["topic_id"] == 1
+        assert row1["topic_id"] == "123456_1"  # Composite: {firm_id}_{local_topic_id}
+        assert row1["local_topic_id"] == 1
         assert row1["representation"] == "revenue growth"
+        assert row1["summary"] == "Analysis of revenue growth trends"
         assert row1["quarter"] == "2024Q1"
 
     def test_parquet_write_schema(self):
@@ -409,6 +415,7 @@ class TestParquetSchema:
                 {
                     "topic_id": 0,
                     "representation": "test topic",
+                    "summary": "Test topic summary",
                     "keywords": ["test"],
                     "size": 5,
                     "sentence_ids": ["123456_T1_0001"],
@@ -441,12 +448,14 @@ class TestParquetSchema:
             expected_columns = {
                 "firm_id",
                 "firm_name",
-                "quarter",  # New field
+                "quarter",
                 "permno",
                 "gvkey",
                 "earnings_call_date",
                 "topic_id",
+                "local_topic_id",
                 "representation",
+                "summary",
                 "keywords",
                 "n_sentences",
                 "sentence_ids",
@@ -733,7 +742,9 @@ class TestBatchIntegration:
                 "gvkey",
                 "earnings_call_date",
                 "topic_id",
+                "local_topic_id",
                 "representation",
+                "summary",
                 "keywords",
                 "n_sentences",
                 "sentence_ids",

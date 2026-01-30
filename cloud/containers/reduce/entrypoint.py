@@ -149,16 +149,25 @@ def load_firm_topics_from_s3(
 
 
 async def generate_theme_descriptions(
-    llm_client: XAIClient,
+    llm_config: Dict[str, Any],
     themes: List[Dict],
 ) -> None:
     """
     Generate LLM descriptions for themes (modifies themes in place).
 
+    IMPORTANT: XAIClient must be created inside async function to avoid
+    event loop issues (Semaphore binds to current loop on creation).
+
     Args:
-        llm_client: Initialized XAIClient
+        llm_config: Dict with model, max_concurrent, timeout
         themes: List of theme dicts from ThemeAggregator
     """
+    # Create XAIClient inside async context to avoid event loop issues
+    llm_client = XAIClient(
+        api_key="dummy",  # vLLM doesn't require auth
+        config=llm_config,
+    )
+
     logger.info(f"Generating LLM descriptions for {len(themes)} themes")
 
     for i, theme in enumerate(themes):
@@ -341,6 +350,11 @@ def main():
     themes = aggregator.aggregate(firm_results)
     logger.info(f"Discovered {len(themes)} themes")
 
+    # Override theme_id to match ADR-007 format: theme_{quarter}_{seq}
+    # ThemeAggregator uses theme_{YYYYMMDD}_{seq} but we need quarter-based IDs
+    for i, theme in enumerate(themes):
+        theme["theme_id"] = f"theme_{quarter}_{i:03d}"
+
     if not themes:
         logger.warning("No themes discovered (all filtered by validation)")
         # Still write empty files for downstream compatibility
@@ -355,16 +369,13 @@ def main():
         # Generate LLM descriptions if configured
         if llm_base_url:
             try:
-                llm_client = XAIClient(
-                    api_key="dummy",  # vLLM doesn't require auth
-                    config={
-                        "model": llm_model_name,
-                        "max_concurrent": 10,
-                        "timeout": 60,
-                    }
-                )
-                logger.info(f"LLM client initialized: model={llm_model_name}")
-                asyncio.run(generate_theme_descriptions(llm_client, themes))
+                llm_config = {
+                    "model": llm_model_name,
+                    "max_concurrent": 10,
+                    "timeout": 60,
+                }
+                logger.info(f"LLM configured: model={llm_model_name}")
+                asyncio.run(generate_theme_descriptions(llm_config, themes))
             except Exception as e:
                 logger.warning(f"LLM descriptions failed, using names as fallback: {e}")
                 for theme in themes:
