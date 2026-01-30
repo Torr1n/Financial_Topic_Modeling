@@ -38,3 +38,7 @@ data "aws_batch_job_queue" "main" {
 data "aws_batch_job_definition" "firm_processor" {
   name = var.job_definition_name
 }
+
+data "aws_batch_job_definition" "theme_aggregator" {
+  name = var.reduce_job_definition_name
+}

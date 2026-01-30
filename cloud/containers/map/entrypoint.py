@@ -52,8 +52,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import project modules (PYTHONPATH=/app set in Dockerfile)
+import asyncio
+
 from cloud.src.firm_processor import FirmProcessor
 from cloud.src.interfaces import DataConnector
+from cloud.src.llm.xai_client import XAIClient
 from cloud.src.topic_models.bertopic_model import BERTopicModel
 
 
@@ -350,6 +353,7 @@ def flatten_to_parquet_rows(
                 "earnings_call_date": firm_metadata.get("earnings_call_date"),
                 "topic_id": topic["topic_id"],
                 "representation": topic["representation"],
+                "summary": topic.get("summary", ""),  # LLM-generated summary
                 "keywords": topic["keywords"],
                 "n_sentences": topic["size"],
                 "sentence_ids": topic["sentence_ids"],
@@ -394,6 +398,60 @@ def write_parquet_chunk(
     return output_key
 
 
+async def generate_topic_summaries(
+    llm_client: XAIClient,
+    firm_output: Dict[str, Any],
+    sentences: List,  # TranscriptSentence objects
+    firm_id: str,
+) -> Dict[str, Any]:
+    """
+    Add LLM summaries to each topic, fallback to representation on failure.
+
+    Args:
+        llm_client: Initialized XAIClient
+        firm_output: Output dict from FirmProcessor.process()
+        sentences: List of TranscriptSentence objects from firm_data
+        firm_id: Firm identifier for logging
+
+    Returns:
+        firm_output dict with 'summary' field added to each topic
+    """
+    # Build sentence lookup by ID
+    sentence_map = {s.sentence_id: s.cleaned_text for s in sentences}
+
+    # Prepare topics for LLM batch processing
+    topics_for_llm = []
+    for topic in firm_output.get("topics", []):
+        # Get up to 50 sentences for the topic
+        topic_sentences = [
+            sentence_map.get(sid, "")
+            for sid in topic.get("sentence_ids", [])[:50]
+        ]
+        # Filter out empty strings
+        topic_sentences = [s for s in topic_sentences if s]
+
+        topics_for_llm.append({
+            "representation": topic["representation"],
+            "sentences": topic_sentences,
+        })
+
+    if not topics_for_llm:
+        return firm_output
+
+    # Generate summaries in batch (parallel within client)
+    logger.info(f"Generating LLM summaries for {len(topics_for_llm)} topics (firm {firm_id})")
+    summaries = await llm_client.generate_batch_summaries(
+        topics_for_llm, log_first_prompt=True
+    )
+
+    # Add summaries to topics (fallback to representation if None)
+    for i, topic in enumerate(firm_output.get("topics", [])):
+        summary = summaries[i] if i < len(summaries) else None
+        topic["summary"] = summary if summary else topic["representation"]
+
+    return firm_output
+
+
 def process_firms(
     connector: DataConnector,
     firm_ids: List[str],
@@ -409,6 +467,7 @@ def process_firms(
     last_chunk_id: int,
     checkpoint_interval: int,
     circuit_breaker: CircuitBreakerConfig,
+    llm_client: Optional[XAIClient] = None,
 ) -> ProcessingResult:
     """
     Process firms with checkpointing, failure tracking, and circuit breaker.
@@ -427,6 +486,7 @@ def process_firms(
         last_chunk_id: Last chunk ID from checkpoint (for restart consistency)
         checkpoint_interval: Firms per checkpoint
         circuit_breaker: Circuit breaker configuration for failure thresholds
+        llm_client: Optional XAIClient for generating topic summaries
 
     Returns:
         ProcessingResult with completed, skipped, and failed firms
@@ -486,6 +546,16 @@ def process_firms(
 
             # Process with FirmProcessor
             output, _ = processor.process(firm_data, embeddings=embeddings)
+
+            # Generate LLM summaries if client available
+            if llm_client is not None:
+                try:
+                    output = asyncio.run(generate_topic_summaries(
+                        llm_client, output, firm_data.sentences, firm_id
+                    ))
+                except Exception as e:
+                    logger.warning(f"LLM summary generation failed for {firm_id}: {e}")
+                    # Continue without summaries - topics will use representation as fallback
 
             # Flatten to rows with metadata (include quarter)
             rows = flatten_to_parquet_rows(output, firm_data.metadata, quarter)
@@ -657,6 +727,30 @@ def main():
     processor = FirmProcessor(topic_model, config)
     logger.info("Topic model and processor initialized")
 
+    # Initialize LLM client if configured
+    llm_base_url = os.environ.get("LLM_BASE_URL")
+    llm_model_name = os.environ.get("LLM_MODEL_NAME", "Qwen/Qwen3-8B")
+    llm_concurrency = int(os.environ.get("LLM_MAX_CONCURRENT", "10"))
+    llm_client = None
+    if llm_base_url:
+        try:
+            llm_client = XAIClient(
+                api_key="dummy",  # vLLM doesn't require auth
+                config={
+                    "model": llm_model_name,
+                    "max_concurrent": llm_concurrency,
+                    "timeout": 60,  # Longer timeout for batch inference
+                }
+            )
+            logger.info(
+                f"LLM client initialized: base_url={llm_base_url}, "
+                f"model={llm_model_name}, concurrency={llm_concurrency}"
+            )
+        except Exception as e:
+            logger.warning(f"LLM client initialization failed, continuing without LLM: {e}")
+    else:
+        logger.info("LLM_BASE_URL not set, topic summaries will use keyword representation")
+
     # Create data connector based on DATA_SOURCE
     logger.info(f"Creating {data_source} data connector...")
     connector = get_data_connector(data_source, quarter, bucket)
@@ -678,6 +772,7 @@ def main():
             last_chunk_id=last_chunk_id,
             checkpoint_interval=checkpoint_interval,
             circuit_breaker=circuit_breaker,
+            llm_client=llm_client,
         )
     finally:
         connector.close()

@@ -34,3 +34,9 @@ variable "enable_vllm" {
   type        = bool
   default     = false
 }
+
+variable "vllm_model" {
+  description = "Model name served by vLLM (must match ECS vllm_model)"
+  type        = string
+  default     = "Qwen/Qwen3-8B"
+}

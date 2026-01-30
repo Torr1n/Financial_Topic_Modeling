@@ -144,7 +144,46 @@
           "Next": "QuarterCompletedWithFailures"
         }
       ],
-      "Default": "QuarterCompletedSuccessfully"
+      "Default": "SubmitReduceJob"
+    },
+    "SubmitReduceJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobName.$": "States.Format('ftm-reduce-{}', $.quarter)",
+        "JobQueue": "${job_queue_arn}",
+        "JobDefinition": "${reduce_job_definition_arn}",
+        "ContainerOverrides": {
+          "Environment": [
+            {
+              "Name": "QUARTER",
+              "Value.$": "$.quarter"
+            }
+          ]
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Batch.ServerException"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.reduce_error",
+          "Next": "ReduceFailed"
+        }
+      ],
+      "ResultPath": "$.reduce_result",
+      "Next": "QuarterCompletedSuccessfully"
+    },
+    "ReduceFailed": {
+      "Type": "Fail",
+      "Error": "ReduceJobFailed",
+      "Cause": "Theme aggregation (reduce phase) failed. Check CloudWatch logs for details."
     },
     "QuarterCompletedWithFailures": {
       "Type": "Fail",

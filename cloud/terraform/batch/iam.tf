@@ -114,7 +114,7 @@ resource "aws_iam_role" "batch_job" {
   }
 }
 
-# S3 access for manifests, checkpoints, prefetch data, and output
+# S3 access for manifests, checkpoints, prefetch data, intermediate, and processed output
 resource "aws_iam_role_policy" "batch_job_s3" {
   name = "ftm-batch-job-s3"
   role = aws_iam_role.batch_job.id
@@ -133,7 +133,8 @@ resource "aws_iam_role_policy" "batch_job_s3" {
           "${data.aws_s3_bucket.pipeline.arn}/manifests/*",
           "${data.aws_s3_bucket.pipeline.arn}/progress/*",
           "${data.aws_s3_bucket.pipeline.arn}/intermediate/*",
-          "${data.aws_s3_bucket.pipeline.arn}/prefetch/*"
+          "${data.aws_s3_bucket.pipeline.arn}/prefetch/*",
+          "${data.aws_s3_bucket.pipeline.arn}/processed/*"
         ]
       },
       {
@@ -148,7 +149,8 @@ resource "aws_iam_role_policy" "batch_job_s3" {
               "manifests/*",
               "progress/*",
               "intermediate/*",
-              "prefetch/*"
+              "prefetch/*",
+              "processed/*"
             ]
           }
         }

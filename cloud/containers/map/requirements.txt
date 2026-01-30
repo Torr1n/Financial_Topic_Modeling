@@ -37,3 +37,6 @@ pyyaml>=6.0
 # Progress
 tqdm>=4.66.0
 joblib>=1.3.0
+
+# LLM Integration
+openai>=1.0.0

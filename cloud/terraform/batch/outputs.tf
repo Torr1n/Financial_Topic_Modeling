@@ -45,3 +45,24 @@ output "s3_bucket_name" {
   description = "S3 bucket for manifests and output (passed through from input)"
   value       = var.s3_bucket_name
 }
+
+# Reduce phase outputs
+output "reduce_ecr_repository_url" {
+  description = "ECR repository URL for reduce phase container images"
+  value       = aws_ecr_repository.reduce.repository_url
+}
+
+output "reduce_ecr_repository_name" {
+  description = "ECR repository name for reduce phase"
+  value       = aws_ecr_repository.reduce.name
+}
+
+output "reduce_job_definition_name" {
+  description = "Batch job definition name for reduce phase"
+  value       = aws_batch_job_definition.theme_aggregator.name
+}
+
+output "reduce_job_definition_arn" {
+  description = "Batch job definition ARN for reduce phase"
+  value       = aws_batch_job_definition.theme_aggregator.arn
+}

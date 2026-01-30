@@ -50,6 +50,8 @@ resource "aws_security_group" "vllm_alb" {
 }
 
 # vLLM Task Security Group - Allows inbound from ALB
+# NOTE: With host network mode, tasks use the instance network directly.
+# This SG is currently unused but kept for a future switch back to awsvpc mode.
 resource "aws_security_group" "vllm_task" {
   name        = "ftm-vllm-task-sg"
   description = "Security group for vLLM ECS tasks"

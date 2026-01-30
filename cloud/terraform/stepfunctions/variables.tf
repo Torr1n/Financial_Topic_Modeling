@@ -18,9 +18,15 @@ variable "job_queue_name" {
 }
 
 variable "job_definition_name" {
-  description = "AWS Batch job definition name"
+  description = "AWS Batch job definition name for map phase"
   type        = string
   default     = "ftm-firm-processor"
+}
+
+variable "reduce_job_definition_name" {
+  description = "AWS Batch job definition name for reduce phase"
+  type        = string
+  default     = "ftm-theme-aggregator"
 }
 
 variable "sns_topic_arn" {
