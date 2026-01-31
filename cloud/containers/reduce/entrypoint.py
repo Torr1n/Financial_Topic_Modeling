@@ -369,12 +369,13 @@ def main():
         # Generate LLM descriptions if configured
         if llm_base_url:
             try:
+                llm_max_concurrent = int(os.environ.get("LLM_MAX_CONCURRENT", "10"))
                 llm_config = {
                     "model": llm_model_name,
-                    "max_concurrent": 10,
+                    "max_concurrent": llm_max_concurrent,
                     "timeout": 60,
                 }
-                logger.info(f"LLM configured: model={llm_model_name}")
+                logger.info(f"LLM configured: model={llm_model_name}, concurrency={llm_max_concurrent}")
                 asyncio.run(generate_theme_descriptions(llm_config, themes))
             except Exception as e:
                 logger.warning(f"LLM descriptions failed, using names as fallback: {e}")

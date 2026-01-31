@@ -528,123 +528,136 @@ def process_firms(
     consecutive_failures = 0
     processed_count = 0  # Excludes skipped firms for rate calculation
 
-    for i, firm_id in enumerate(pending):
-        try:
-            logger.info(f"Processing firm {firm_id} ({i + 1}/{len(pending)})")
+    # Create event loop once for all LLM calls (avoids per-firm overhead)
+    llm_loop = None
+    if llm_config is not None:
+        llm_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(llm_loop)
+        logger.info("Created reusable event loop for LLM calls")
 
-            # Fetch transcript for this firm
-            transcript_data = connector.fetch_transcripts(
-                firm_ids=[firm_id],
-                start_date=start_date,
-                end_date=end_date,
-            )
+    try:
+        for i, firm_id in enumerate(pending):
+            try:
+                logger.info(f"Processing firm {firm_id} ({i + 1}/{len(pending)})")
 
-            # Check if firm has data (skippable - not an error)
-            if firm_id not in transcript_data.firms:
-                logger.warning(f"No transcript data for firm {firm_id}, skipping")
-                result.skipped.add(firm_id)
-                result.completed.add(firm_id)
-                # Skipped firms don't reset consecutive failures (they're not successes)
-                continue
-
-            firm_data = transcript_data.firms[firm_id]
-
-            if not firm_data.sentences:
-                logger.warning(f"No sentences for firm {firm_id}, skipping")
-                result.skipped.add(firm_id)
-                result.completed.add(firm_id)
-                continue
-
-            # Compute embeddings
-            texts = [s.cleaned_text for s in firm_data.sentences]
-            embeddings = embedding_model.encode(texts, show_progress_bar=False)
-
-            # Process with FirmProcessor
-            output, _ = processor.process(firm_data, embeddings=embeddings)
-
-            # Generate LLM summaries if configured
-            if llm_config is not None:
-                try:
-                    output = asyncio.run(generate_topic_summaries(
-                        llm_config, output, firm_data.sentences, firm_id
-                    ))
-                except Exception as e:
-                    logger.warning(f"LLM summary generation failed for {firm_id}: {e}")
-                    # Continue without summaries - topics will use representation as fallback
-
-            # Flatten to rows with metadata (include quarter)
-            rows = flatten_to_parquet_rows(output, firm_data.metadata, quarter)
-            buffer.extend(rows)
-            firms_in_buffer.append(firm_id)
-
-            # Success - reset consecutive failure counter
-            consecutive_failures = 0
-            processed_count += 1
-
-            # Checkpoint every N firms
-            if len(firms_in_buffer) >= checkpoint_interval:
-                # Write chunk
-                write_parquet_chunk(
-                    s3_client, bucket, quarter, batch_id, chunk_id, buffer
+                # Fetch transcript for this firm
+                transcript_data = connector.fetch_transcripts(
+                    firm_ids=[firm_id],
+                    start_date=start_date,
+                    end_date=end_date,
                 )
 
-                # Update completed set
-                result.completed.update(firms_in_buffer)
+                # Check if firm has data (skippable - not an error)
+                if firm_id not in transcript_data.firms:
+                    logger.warning(f"No transcript data for firm {firm_id}, skipping")
+                    result.skipped.add(firm_id)
+                    result.completed.add(firm_id)
+                    # Skipped firms don't reset consecutive failures (they're not successes)
+                    continue
 
-                # Save checkpoint
-                save_checkpoint(
-                    s3_client, bucket, batch_id, quarter, result.completed, chunk_id
-                )
+                firm_data = transcript_data.firms[firm_id]
 
-                # Reset buffer
-                buffer = []
-                firms_in_buffer = []
-                chunk_id += 1
+                if not firm_data.sentences:
+                    logger.warning(f"No sentences for firm {firm_id}, skipping")
+                    result.skipped.add(firm_id)
+                    result.completed.add(firm_id)
+                    continue
 
-        except Exception as e:
-            # Track failure with details for post-mortem
-            logger.error(f"Error processing firm {firm_id}: {e}", exc_info=True)
-            result.failed.append({
-                "firm_id": firm_id,
-                "error_type": type(e).__name__,
-                "error_message": str(e),
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-            })
+                # Compute embeddings
+                texts = [s.cleaned_text for s in firm_data.sentences]
+                embeddings = embedding_model.encode(texts, show_progress_bar=False)
 
-            consecutive_failures += 1
-            processed_count += 1
+                # Process with FirmProcessor
+                output, _ = processor.process(firm_data, embeddings=embeddings)
 
-            # Check for critical errors (fail immediately)
-            if is_critical_error(e):
-                result.circuit_breaker_tripped = True
-                result.circuit_breaker_reason = (
-                    f"Critical error detected: {type(e).__name__}: {str(e)[:100]}"
-                )
-                logger.error(f"Circuit breaker: {result.circuit_breaker_reason}")
-                break
+                # Generate LLM summaries if configured (uses reusable event loop)
+                if llm_loop is not None:
+                    try:
+                        output = llm_loop.run_until_complete(generate_topic_summaries(
+                            llm_config, output, firm_data.sentences, firm_id
+                        ))
+                    except Exception as e:
+                        logger.warning(f"LLM summary generation failed for {firm_id}: {e}")
+                        # Continue without summaries - topics will use representation as fallback
 
-            # Check consecutive failure threshold
-            if consecutive_failures >= circuit_breaker.max_consecutive_failures:
-                result.circuit_breaker_tripped = True
-                result.circuit_breaker_reason = (
-                    f"Consecutive failures ({consecutive_failures}) >= "
-                    f"threshold ({circuit_breaker.max_consecutive_failures})"
-                )
-                logger.error(f"Circuit breaker: {result.circuit_breaker_reason}")
-                break
+                # Flatten to rows with metadata (include quarter)
+                rows = flatten_to_parquet_rows(output, firm_data.metadata, quarter)
+                buffer.extend(rows)
+                firms_in_buffer.append(firm_id)
 
-            # Check failure rate threshold (only after minimum processed)
-            if processed_count >= circuit_breaker.min_processed_for_rate:
-                failure_rate = len(result.failed) / processed_count
-                if failure_rate >= circuit_breaker.max_failure_rate:
+                # Success - reset consecutive failure counter
+                consecutive_failures = 0
+                processed_count += 1
+
+                # Checkpoint every N firms
+                if len(firms_in_buffer) >= checkpoint_interval:
+                    # Write chunk
+                    write_parquet_chunk(
+                        s3_client, bucket, quarter, batch_id, chunk_id, buffer
+                    )
+
+                    # Update completed set
+                    result.completed.update(firms_in_buffer)
+
+                    # Save checkpoint
+                    save_checkpoint(
+                        s3_client, bucket, batch_id, quarter, result.completed, chunk_id
+                    )
+
+                    # Reset buffer
+                    buffer = []
+                    firms_in_buffer = []
+                    chunk_id += 1
+
+            except Exception as e:
+                # Track failure with details for post-mortem
+                logger.error(f"Error processing firm {firm_id}: {e}", exc_info=True)
+                result.failed.append({
+                    "firm_id": firm_id,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                })
+
+                consecutive_failures += 1
+                processed_count += 1
+
+                # Check for critical errors (fail immediately)
+                if is_critical_error(e):
                     result.circuit_breaker_tripped = True
                     result.circuit_breaker_reason = (
-                        f"Failure rate ({failure_rate:.1%}) >= "
-                        f"threshold ({circuit_breaker.max_failure_rate:.1%}) "
-                        f"after {processed_count} firms"
+                        f"Critical error detected: {type(e).__name__}: {str(e)[:100]}"
                     )
                     logger.error(f"Circuit breaker: {result.circuit_breaker_reason}")
                     break
+
+                # Check consecutive failure threshold
+                if consecutive_failures >= circuit_breaker.max_consecutive_failures:
+                    result.circuit_breaker_tripped = True
+                    result.circuit_breaker_reason = (
+                        f"Consecutive failures ({consecutive_failures}) >= "
+                        f"threshold ({circuit_breaker.max_consecutive_failures})"
+                    )
+                    logger.error(f"Circuit breaker: {result.circuit_breaker_reason}")
+                    break
+
+                # Check failure rate threshold (only after minimum processed)
+                if processed_count >= circuit_breaker.min_processed_for_rate:
+                    failure_rate = len(result.failed) / processed_count
+                    if failure_rate >= circuit_breaker.max_failure_rate:
+                        result.circuit_breaker_tripped = True
+                        result.circuit_breaker_reason = (
+                            f"Failure rate ({failure_rate:.1%}) >= "
+                            f"threshold ({circuit_breaker.max_failure_rate:.1%}) "
+                            f"after {processed_count} firms"
+                        )
+                        logger.error(f"Circuit breaker: {result.circuit_breaker_reason}")
+                        break
+    finally:
+        # Clean up event loop
+        if llm_loop is not None:
+            llm_loop.close()
+            logger.info("Closed LLM event loop")
 
     # Write remaining buffer (even if circuit breaker tripped - save progress)
     if buffer:

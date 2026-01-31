@@ -40,3 +40,9 @@ variable "vllm_model" {
   type        = string
   default     = "Qwen/Qwen3-8B"
 }
+
+variable "llm_max_concurrent" {
+  description = "Maximum concurrent LLM requests per batch job (conservative for single vLLM instance)"
+  type        = number
+  default     = 10
+}

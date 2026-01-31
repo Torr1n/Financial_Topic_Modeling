@@ -43,7 +43,8 @@ resource "aws_batch_job_definition" "firm_processor" {
       ],
       var.enable_vllm ? [
         { name = "LLM_BASE_URL", value = data.aws_ssm_parameter.vllm_base_url[0].value },
-        { name = "LLM_MODEL_NAME", value = var.vllm_model }
+        { name = "LLM_MODEL_NAME", value = var.vllm_model },
+        { name = "LLM_MAX_CONCURRENT", value = tostring(var.llm_max_concurrent) }
       ] : []
     )
 
@@ -125,7 +126,8 @@ resource "aws_batch_job_definition" "theme_aggregator" {
       ],
       var.enable_vllm ? [
         { name = "LLM_BASE_URL", value = data.aws_ssm_parameter.vllm_base_url[0].value },
-        { name = "LLM_MODEL_NAME", value = var.vllm_model }
+        { name = "LLM_MODEL_NAME", value = var.vllm_model },
+        { name = "LLM_MAX_CONCURRENT", value = tostring(var.llm_max_concurrent) }
       ] : []
     )
 
