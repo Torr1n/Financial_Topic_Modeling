@@ -28,6 +28,20 @@ embedding:
   device: "cpu"
 
 # =============================================================================
+# DATA SOURCE CONFIGURATION
+# =============================================================================
+data_source:
+  type: "local"  # "local" or "s3"
+
+  local:
+    csv_path: "data/transcripts.csv"
+
+  s3:
+    bucket: "financial-topic-modeling"
+    key: "data/transcripts.csv"
+    region: "us-east-1"
+
+# =============================================================================
 # FIRM-LEVEL TOPIC MODEL (BERTopic)
 # =============================================================================
 # Configuration for per-firm topic clustering

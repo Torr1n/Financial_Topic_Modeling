@@ -402,3 +402,309 @@ def create_combined_portfolio_analysis(
     logger.info("=" * 80)
 
     return combined_portfolio
+
+
+def plot_sentiment_by_theme(
+    sentiment_df: pd.DataFrame,
+    output_dir: Path
+) -> None:
+    """
+    Create box plot showing sentiment score distributions grouped by theme.
+
+    Each theme gets one box on the x-axis, sorted by median sentiment from
+    lowest (left) to highest (right). Boxes are colored red-ish for themes
+    with negative median sentiment and green-ish for positive median sentiment.
+
+    Args:
+        sentiment_df: DataFrame with columns: theme_id, theme_name,
+            sentiment_score (one row per firm-theme observation).
+        output_dir: Path to directory for saving the chart PNG.
+    """
+    if sentiment_df is None or sentiment_df.empty:
+        logger.warning("No sentiment data to plot")
+        return
+
+    logger.info("Creating sentiment-by-theme box plot...")
+
+    # Ensure output_dir is a Path object
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed - skipping chart generation")
+        logger.warning("Install with: pip install matplotlib")
+        return
+
+    # Compute median sentiment per theme for sorting and coloring
+    theme_medians = (
+        sentiment_df
+        .groupby(['theme_id', 'theme_name'])['sentiment_score']
+        .median()
+        .reset_index()
+        .rename(columns={'sentiment_score': 'median_sentiment'})
+        .sort_values('median_sentiment')
+    )
+
+    # Ordered theme names (lowest median first)
+    ordered_theme_names = theme_medians['theme_name'].tolist()
+    ordered_theme_ids = theme_medians['theme_id'].tolist()
+
+    # Build list of data arrays in sorted order
+    data_by_theme = []
+    for theme_id in ordered_theme_ids:
+        theme_data = sentiment_df.loc[
+            sentiment_df['theme_id'] == theme_id, 'sentiment_score'
+        ].dropna().values
+        data_by_theme.append(theme_data)
+
+    # Assign colors based on median sign
+    box_colors = [
+        '#d96060' if med < 0 else '#5db85d'
+        for med in theme_medians['median_sentiment'].values
+    ]
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    bp = ax.boxplot(
+        data_by_theme,
+        labels=ordered_theme_names,
+        patch_artist=True,
+        widths=0.6,
+        medianprops=dict(color='black', linewidth=1.5),
+        flierprops=dict(marker='o', markersize=3, alpha=0.4),
+    )
+
+    # Color each box
+    for patch, color in zip(bp['boxes'], box_colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+
+    # Neutral sentiment reference line
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0, alpha=0.5)
+
+    ax.set_title('Sentiment Distribution by Theme', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Theme', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Sentiment Score', fontsize=12, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=10)
+    plt.xticks(rotation=45, ha='right')
+    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+    plt.tight_layout()
+
+    chart_path = output_dir / 'sentiment_by_theme.png'
+    plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.info(f"Saved sentiment-by-theme box plot to {chart_path}")
+
+
+def plot_event_study_car(
+    car_df: pd.DataFrame,
+    output_dir: Path
+) -> None:
+    """
+    Create line plot of cumulative abnormal returns around earnings events.
+
+    If the input contains a ``sentiment_bucket`` column the plot draws
+    separate lines for Low, Medium, and High sentiment groups; otherwise a
+    single aggregate line is shown. Shaded bands represent +/-1.96 standard
+    errors (approximate 95% confidence interval).
+
+    Args:
+        car_df: DataFrame with columns: day (relative to event, e.g. -10 to
+            +10), car_mean, car_se (standard error). Optionally includes
+            sentiment_bucket (Low, Medium, High).
+        output_dir: Path to directory for saving the chart PNG.
+    """
+    if car_df is None or car_df.empty:
+        logger.warning("No CAR data to plot")
+        return
+
+    logger.info("Creating event study CAR plot...")
+
+    # Ensure output_dir is a Path object
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed - skipping chart generation")
+        logger.warning("Install with: pip install matplotlib")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    has_buckets = 'sentiment_bucket' in car_df.columns
+
+    if has_buckets:
+        bucket_colors = {'Low': '#d62728', 'Medium': '#ff7f0e', 'High': '#2ca02c'}
+        bucket_labels = {'Low': 'Low Sentiment', 'Medium': 'Medium Sentiment', 'High': 'High Sentiment'}
+
+        for bucket in ['Low', 'Medium', 'High']:
+            bucket_data = car_df[car_df['sentiment_bucket'] == bucket].sort_values('day')
+            if bucket_data.empty:
+                continue
+
+            days = bucket_data['day'].values
+            car_mean = bucket_data['car_mean'].values
+            car_se = bucket_data['car_se'].values
+            color = bucket_colors[bucket]
+
+            ax.plot(
+                days, car_mean,
+                label=bucket_labels[bucket],
+                color=color,
+                linewidth=2.0,
+            )
+            ax.fill_between(
+                days,
+                car_mean - 1.96 * car_se,
+                car_mean + 1.96 * car_se,
+                color=color,
+                alpha=0.15,
+            )
+    else:
+        car_df_sorted = car_df.sort_values('day')
+        days = car_df_sorted['day'].values
+        car_mean = car_df_sorted['car_mean'].values
+        car_se = car_df_sorted['car_se'].values
+
+        ax.plot(
+            days, car_mean,
+            label='CAR',
+            color='#1f77b4',
+            linewidth=2.0,
+        )
+        ax.fill_between(
+            days,
+            car_mean - 1.96 * car_se,
+            car_mean + 1.96 * car_se,
+            color='#1f77b4',
+            alpha=0.15,
+        )
+
+    # Event date and zero-CAR reference lines
+    ax.axvline(x=0, color='gray', linestyle='--', linewidth=1.0, alpha=0.7)
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0, alpha=0.5)
+
+    ax.set_title(
+        'Cumulative Abnormal Returns Around Earnings Announcements',
+        fontsize=14, fontweight='bold',
+    )
+    ax.set_xlabel('Days Relative to Event', fontsize=12, fontweight='bold')
+    ax.set_ylabel('CAR (%)', fontsize=12, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=10)
+    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+    ax.legend(loc='best', fontsize=11, framealpha=0.9)
+
+    plt.tight_layout()
+
+    chart_path = output_dir / 'event_study_car.png'
+    plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.info(f"Saved event study CAR plot to {chart_path}")
+
+
+def plot_regression_forest(
+    regression_df: pd.DataFrame,
+    output_dir: Path
+) -> None:
+    """
+    Create a forest plot (horizontal dot-and-whisker) of regression coefficients.
+
+    Each theme is a row on the y-axis with a dot at its sentiment coefficient
+    and a horizontal line spanning the 95% confidence interval. Themes are
+    sorted by coefficient value (most negative at bottom, most positive at
+    top). Dots are filled dark when significant at p < 0.05 and hollow / light
+    gray otherwise.
+
+    Args:
+        regression_df: DataFrame with columns: theme_name, coefficient,
+            ci_lower, ci_upper, p_value.
+        output_dir: Path to directory for saving the chart PNG.
+    """
+    if regression_df is None or regression_df.empty:
+        logger.warning("No regression data to plot")
+        return
+
+    logger.info("Creating regression forest plot...")
+
+    # Ensure output_dir is a Path object
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed - skipping chart generation")
+        logger.warning("Install with: pip install matplotlib")
+        return
+
+    # Sort by coefficient (most negative at bottom so it reads naturally)
+    df_sorted = regression_df.sort_values('coefficient').reset_index(drop=True)
+
+    n_themes = len(df_sorted)
+    fig_height = max(8, n_themes * 0.4)
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+
+    y_positions = np.arange(n_themes)
+
+    for i, row in df_sorted.iterrows():
+        significant = row['p_value'] < 0.05
+
+        # Confidence interval whisker
+        ax.plot(
+            [row['ci_lower'], row['ci_upper']],
+            [i, i],
+            color='#333333' if significant else '#bbbbbb',
+            linewidth=1.5,
+            solid_capstyle='round',
+        )
+
+        # Coefficient dot
+        ax.plot(
+            row['coefficient'], i,
+            marker='o',
+            markersize=7,
+            color='#1a1a1a' if significant else 'none',
+            markeredgecolor='#1a1a1a' if significant else '#aaaaaa',
+            markeredgewidth=1.5,
+        )
+
+    # Zero reference line
+    ax.axvline(x=0, color='gray', linestyle='--', linewidth=1.0, alpha=0.7)
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(df_sorted['theme_name'].values, fontsize=10)
+    ax.set_xlabel('Sentiment Coefficient', fontsize=12, fontweight='bold')
+    ax.set_title(
+        'Sentiment Coefficient by Theme (with 95% CI)',
+        fontsize=14, fontweight='bold',
+    )
+    ax.tick_params(axis='both', labelsize=10)
+    ax.grid(True, axis='x', alpha=0.3, linestyle='--', linewidth=0.5)
+
+    # Annotation in the bottom margin
+    fig.text(
+        0.5, 0.01,
+        'Filled dots = significant at p<0.05',
+        ha='center', fontsize=9, fontstyle='italic', color='#555555',
+    )
+
+    plt.tight_layout(rect=[0, 0.03, 1, 1])
+
+    chart_path = output_dir / 'regression_forest_plot.png'
+    plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.info(f"Saved regression forest plot to {chart_path}")
