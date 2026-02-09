@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Import project modules (PYTHONPATH=/app set in Dockerfile)
 from cloud.src.theme_aggregator import ThemeAggregator
 from cloud.src.topic_models.bertopic_model import BERTopicModel
-from cloud.src.llm.xai_client import XAIClient
+from cloud.src.llm.xai_client import XAIClient, LLMUnavailableError
 
 
 def get_env_required(name: str) -> str:
@@ -149,25 +149,20 @@ def load_firm_topics_from_s3(
 
 
 async def generate_theme_descriptions(
-    llm_config: Dict[str, Any],
+    llm_client: XAIClient,
     themes: List[Dict],
 ) -> None:
     """
     Generate LLM descriptions for themes (modifies themes in place).
-
-    IMPORTANT: XAIClient must be created inside async function to avoid
-    event loop issues (Semaphore binds to current loop on creation).
+    Raises LLMUnavailableError on failure - no fallback allowed.
 
     Args:
-        llm_config: Dict with model, max_concurrent, timeout
+        llm_client: Shared XAIClient instance (created once per job)
         themes: List of theme dicts from ThemeAggregator
-    """
-    # Create XAIClient inside async context to avoid event loop issues
-    llm_client = XAIClient(
-        api_key="dummy",  # vLLM doesn't require auth
-        config=llm_config,
-    )
 
+    Raises:
+        LLMUnavailableError: If LLM is unavailable after retries
+    """
     logger.info(f"Generating LLM descriptions for {len(themes)} themes")
 
     for i, theme in enumerate(themes):
@@ -181,22 +176,26 @@ async def generate_theme_descriptions(
         topic_summaries = [s for s in topic_summaries if s]
 
         if not topic_summaries:
-            theme["description"] = theme.get("name", "")
-            continue
-
-        try:
-            # Get theme keywords for context
-            theme_keywords = ", ".join(theme.get("keywords", [])[:10])
-
-            description = await llm_client.generate_theme_description(
-                theme_keywords=theme_keywords,
-                topic_summaries=topic_summaries,
-                log_prompt=(i == 0),  # Log first prompt for debugging
+            raise LLMUnavailableError(
+                f"No topic summaries for theme {theme.get('theme_id')}", 0
             )
-            theme["description"] = description if description else theme.get("name", "")
-        except Exception as e:
-            logger.warning(f"LLM description failed for theme {theme.get('theme_id')}: {e}")
-            theme["description"] = theme.get("name", "")
+
+        # Get theme keywords for context
+        theme_keywords = ", ".join(theme.get("keywords", [])[:10])
+
+        # LLMUnavailableError propagates - no fallback
+        description = await llm_client.generate_theme_description(
+            theme_keywords=theme_keywords,
+            topic_summaries=topic_summaries,
+            log_prompt=(i == 0),  # Log first prompt for debugging
+        )
+
+        if not description:
+            raise LLMUnavailableError(
+                f"Empty description for theme {theme.get('theme_id')}", 0
+            )
+
+        theme["description"] = description
 
 
 def flatten_themes_to_parquet(
@@ -366,26 +365,38 @@ def main():
             "earnings_call_date", "topic_id", "n_sentences", "quarter"
         ])
     else:
-        # Generate LLM descriptions if configured
-        if llm_base_url:
-            try:
-                llm_max_concurrent = int(os.environ.get("LLM_MAX_CONCURRENT", "10"))
-                llm_config = {
+        # LLM is REQUIRED for theme descriptions - no fallback allowed
+        if not llm_base_url:
+            logger.error("LLM_BASE_URL required but not set")
+            return 1
+
+        llm_max_concurrent = int(os.environ.get("LLM_MAX_CONCURRENT", "10"))
+        logger.info(f"LLM configured: model={llm_model_name}, concurrency={llm_max_concurrent}")
+
+        # CRITICAL: Create loop FIRST, set as current, THEN create client
+        # This ensures the Semaphore binds to the correct event loop
+        # DO NOT use asyncio.run() - it creates its own loop causing binding issues
+        llm_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(llm_loop)
+
+        try:
+            # Create client AFTER setting the loop
+            llm_client = XAIClient(
+                api_key="dummy",  # vLLM doesn't require auth
+                config={
                     "model": llm_model_name,
                     "max_concurrent": llm_max_concurrent,
                     "timeout": 60,
-                }
-                logger.info(f"LLM configured: model={llm_model_name}, concurrency={llm_max_concurrent}")
-                asyncio.run(generate_theme_descriptions(llm_config, themes))
-            except Exception as e:
-                logger.warning(f"LLM descriptions failed, using names as fallback: {e}")
-                for theme in themes:
-                    if not theme.get("description"):
-                        theme["description"] = theme.get("name", "")
-        else:
-            logger.info("LLM not configured, using theme names as descriptions")
-            for theme in themes:
-                theme["description"] = theme.get("name", "")
+                    "max_health_wait": 600,  # 10 min max wait for vLLM recovery
+                    "health_poll_interval": 30,  # Poll every 30 seconds
+                },
+            )
+
+            # Run on the SAME loop - LLMUnavailableError propagates
+            llm_loop.run_until_complete(generate_theme_descriptions(llm_client, themes))
+        finally:
+            llm_loop.close()
+            logger.info("Closed LLM event loop")
 
         # Flatten to DataFrames
         themes_df = flatten_themes_to_parquet(themes, quarter)

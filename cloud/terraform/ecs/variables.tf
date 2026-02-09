@@ -24,6 +24,12 @@ variable "spot_percentage" {
   default     = 100
 }
 
+variable "on_demand_base_capacity" {
+  description = "Number of on-demand instances to maintain (guaranteed availability)"
+  type        = number
+  default     = 1
+}
+
 variable "min_capacity" {
   description = "Minimum number of vLLM tasks (set to 1 during runs, 0 when idle)"
   type        = number

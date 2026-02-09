@@ -15,7 +15,7 @@ Sprint 7 smoke test for validating LLM integration (map phase) and reduce phase 
 
 ```bash
 # 1. Run unit tests
-pytest tests/integration/test_batch_integration.py -v -k "not integration"
+pytest tests/integration/test_batch_integration.py -v -m "not integration"
 
 # 2. Validate Terraform
 cd cloud/terraform/batch && terraform fmt && terraform validate
@@ -60,10 +60,11 @@ cd ../../..
 ## Phase 3: Run Smoke Test
 
 ```bash
-# 8. Scale up vLLM (wait ~3-5 min for model load)
+# 8. Scale up vLLM ASG and ECS service (triggers on-demand base capacity)
+aws autoscaling set-desired-capacity --auto-scaling-group-name ftm-vllm-asg --desired-capacity 1
 aws ecs update-service --cluster ftm-vllm-cluster --service ftm-vllm-service --desired-count 1
 
-# 9. Wait for vLLM to be healthy
+# 9. Wait for vLLM to be healthy (~5 min for model load)
 aws ecs wait services-stable --cluster ftm-vllm-cluster --services ftm-vllm-service
 
 # 10. Get state machine ARN
@@ -138,8 +139,9 @@ print(contribs[['theme_id', 'firm_name', 'permno', 'earnings_call_date']].head()
 ## Phase 6: Cleanup
 
 ```bash
-# 16. Scale down vLLM
+# 16. Scale down vLLM ECS service and ASG (cost savings)
 aws ecs update-service --cluster ftm-vllm-cluster --service ftm-vllm-service --desired-count 0
+aws autoscaling set-desired-capacity --auto-scaling-group-name ftm-vllm-asg --desired-capacity 0
 ```
 
 ---
@@ -147,16 +149,48 @@ aws ecs update-service --cluster ftm-vllm-cluster --service ftm-vllm-service --d
 ## Success Criteria Checklist
 
 - [ ] Map output has `summary` field with natural language (not keywords)
+- [ ] Map output has `naming_method` field = `"llm"` for all rows
 - [ ] vLLM logs show `/v1/chat/completions` requests
 - [ ] `themes.parquet` exists with `theme_id` format `theme_2023Q1_XXX`
 - [ ] `theme_contributions.parquet` has columns: `permno`, `gvkey`, `earnings_call_date`
 - [ ] Step Functions execution completes with status `SUCCEEDED`
+
+### Verify LLM Naming Quality
+
+```bash
+# After map phase completes, verify all rows have valid LLM summaries
+python3 -c "
+import pandas as pd
+import glob
+files = glob.glob('/tmp/map-output/*.parquet')
+df = pd.concat([pd.read_parquet(f) for f in files])
+
+# Check 1: naming_method must be 'llm' for all rows
+naming_methods = df['naming_method'].unique()
+print(f'Naming methods found: {naming_methods}')
+assert list(naming_methods) == ['llm'], 'ERROR: Found non-LLM naming!'
+
+# Check 2: summary must be non-empty for all rows
+empty_summaries = df[df['summary'].isna() | (df['summary'] == '')].shape[0]
+print(f'Empty summaries: {empty_summaries}/{len(df)}')
+assert empty_summaries == 0, f'ERROR: {empty_summaries} rows have empty summaries!'
+
+# Check 3: summary should differ from representation (not keyword fallback)
+keyword_matches = (df['summary'] == df['representation']).sum()
+print(f'Summary equals representation: {keyword_matches}/{len(df)}')
+if keyword_matches > 0:
+    print('WARNING: Some summaries match keywords exactly (may indicate fallback)')
+
+print('SUCCESS: All topics have valid LLM summaries')
+"
+```
 
 ---
 
 ## Troubleshooting
 
 ### vLLM not responding
+
 ```bash
 # Check ECS task status
 aws ecs list-tasks --cluster ftm-vllm-cluster --service-name ftm-vllm-service
@@ -167,6 +201,7 @@ aws logs tail /ecs/ftm-vllm --since 10m
 ```
 
 ### Map phase fails
+
 ```bash
 # Check Batch job logs
 aws logs tail /aws/batch/ftm --since 30m --filter-pattern "ERROR"
@@ -177,6 +212,7 @@ aws s3 cp s3://ftm-pipeline-78ea68c8/progress/2023Q1/<batch_id>_failures.json -
 ```
 
 ### Reduce phase fails
+
 ```bash
 # Check reduce job logs
 aws logs tail /aws/batch/ftm --since 30m --filter-pattern "theme-aggregator"
@@ -186,12 +222,60 @@ aws logs tail /aws/batch/ftm --since 30m --filter-pattern "theme-aggregator"
 
 ## Configuration Reference
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_MODEL_NAME` | `Qwen/Qwen3-8B` | Model served by vLLM |
-| `LLM_MAX_CONCURRENT` | `10` | Max concurrent LLM requests per job |
-| `CHECKPOINT_INTERVAL` | `50` | Firms per checkpoint in map phase |
+| Variable              | Default         | Description                         |
+| --------------------- | --------------- | ----------------------------------- |
+| `LLM_MODEL_NAME`      | `Qwen/Qwen3-8B` | Model served by vLLM                |
+| `LLM_MAX_CONCURRENT`  | `10`            | Max concurrent LLM requests per job |
+| `CHECKPOINT_INTERVAL` | `50`            | Firms per checkpoint in map phase   |
 
 ---
 
-*Last updated: Sprint 7 (2026-01-30)*
+---
+
+## Operational Notes
+
+### Scale-to-Zero Behavior
+
+`on_demand_base_capacity=1` only applies when ASG desired capacity > 0. When scaled to zero between runs, no instances run (as expected for cost savings).
+
+**Runbook** - before each pipeline run:
+```bash
+# Scale UP before run (triggers on-demand base)
+aws autoscaling set-desired-capacity --auto-scaling-group-name ftm-vllm-asg --desired-capacity 1
+aws ecs update-service --cluster ftm-vllm-cluster --service ftm-vllm-service --desired-count 1
+
+# Wait for vLLM healthy (~5 min for model load)
+aws ecs wait services-stable --cluster ftm-vllm-cluster --services ftm-vllm-service
+
+# Run pipeline...
+aws stepfunctions start-execution --state-machine-arn $STATE_MACHINE_ARN --input '{"quarter":"2023Q1"}'
+
+# Scale DOWN after run (cost savings)
+aws ecs update-service --cluster ftm-vllm-cluster --service ftm-vllm-service --desired-count 0
+aws autoscaling set-desired-capacity --auto-scaling-group-name ftm-vllm-asg --desired-capacity 0
+```
+
+### Shared Recovery Wait Behavior
+
+When vLLM goes down mid-map (e.g., 50 concurrent LLM calls in flight):
+- All 50 calls share the SAME `XAIClient` instance (created once per job)
+- First coroutine to detect failure acquires the shared lock, starts polling `/health`
+- Other 49 coroutines block on the shared event (no wasted polling)
+- When vLLM recovers, all coroutines resume together
+- Total wait time = ~3-5 min (recovery), not 50 × 10 min
+
+### Health-Aware Retry Verification
+
+To verify health-aware retry is working during a spot interruption test:
+```bash
+# Watch for recovery messages in Batch logs
+aws logs tail /aws/batch/ftm --follow --filter-pattern "vLLM"
+
+# Expected patterns:
+# - "vLLM unhealthy, waiting... (30s / 600s)"
+# - "vLLM recovered after X.Xs"
+```
+
+---
+
+_Last updated: Sprint 7 (2026-02-02)_

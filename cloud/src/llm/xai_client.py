@@ -22,9 +22,23 @@ import logging
 import os
 from typing import Dict, Any, List, Optional
 
-from openai import AsyncOpenAI, RateLimitError, APIStatusError, APITimeoutError, APIError
+from openai import (
+    AsyncOpenAI,
+    APIConnectionError,
+    APITimeoutError,
+    RateLimitError,
+    APIStatusError,
+    APIError,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class LLMUnavailableError(Exception):
+    """Raised when vLLM is unavailable after maximum wait time."""
+    def __init__(self, message: str, wait_time: float):
+        self.wait_time = wait_time
+        super().__init__(f"LLM unavailable after {wait_time:.0f}s: {message}")
 
 # Default configuration values
 DEFAULT_MODEL = "grok-4-1-fast-reasoning"
@@ -35,6 +49,10 @@ DEFAULT_BASE_URL = "https://api.x.ai/v1"
 
 # Maximum number of sentences to include in topic prompt (to avoid token limits)
 MAX_SENTENCES_IN_PROMPT = 50
+
+# Health-aware retry defaults
+DEFAULT_MAX_HEALTH_WAIT = 600      # 10 min max wait for recovery
+DEFAULT_HEALTH_POLL_INTERVAL = 30  # Poll every 30 seconds
 
 # Prompt templates
 TOPIC_SUMMARY_PROMPT = """## ROLE ##
@@ -74,8 +92,8 @@ class XAIClient:
     Features:
     - OpenAI-compatible API (xAI uses same protocol)
     - Semaphore rate limiting (configurable concurrency)
-    - Exponential backoff retry on transient errors
-    - Graceful fallback (returns None on persistent failure)
+    - Health-aware retry with shared recovery lock
+    - Raises LLMUnavailableError on unrecoverable failure (never returns None)
 
     Attributes:
         _api_key: xAI API key
@@ -83,6 +101,8 @@ class XAIClient:
         _max_concurrent: Max concurrent requests (default: 50)
         _timeout: Request timeout in seconds (default: 30)
         _max_retries: Max retry attempts (default: 3)
+        _max_health_wait: Max seconds to wait for vLLM recovery (default: 600)
+        _health_poll_interval: Seconds between health checks (default: 30)
     """
 
     def __init__(self, api_key: str, config: Optional[Dict[str, Any]] = None):
@@ -97,6 +117,8 @@ class XAIClient:
                 - timeout: Request timeout in seconds (default: 30)
                 - max_retries: Max retry attempts (default: 3)
                 - base_url: Override API base URL (default: xAI API)
+                - max_health_wait: Max seconds to wait for vLLM recovery (default: 600)
+                - health_poll_interval: Seconds between health checks (default: 30)
 
         Environment Variables:
             LLM_BASE_URL: If set, overrides the default base URL (xAI API).
@@ -109,6 +131,8 @@ class XAIClient:
         self._max_concurrent = config.get("max_concurrent", DEFAULT_MAX_CONCURRENT)
         self._timeout = config.get("timeout", DEFAULT_TIMEOUT)
         self._max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
+        self._max_health_wait = config.get("max_health_wait", DEFAULT_MAX_HEALTH_WAIT)
+        self._health_poll_interval = config.get("health_poll_interval", DEFAULT_HEALTH_POLL_INTERVAL)
 
         # Base URL priority: config > env var > default (xAI)
         self._base_url = config.get(
@@ -118,6 +142,11 @@ class XAIClient:
 
         # Rate limiting semaphore
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
+
+        # Shared recovery lock (prevents 50 concurrent requests each polling independently)
+        self._recovery_lock = asyncio.Lock()
+        self._recovery_event = asyncio.Event()
+        self._recovery_event.set()  # Initially not in recovery
 
         # OpenAI-compatible client (works with xAI, vLLM, or any compatible endpoint)
         self._client = AsyncOpenAI(
@@ -129,15 +158,70 @@ class XAIClient:
         logger.info(
             f"XAIClient initialized: model={self._model}, "
             f"base_url={self._base_url}, "
-            f"max_concurrent={self._max_concurrent}, timeout={self._timeout}s"
+            f"max_concurrent={self._max_concurrent}, timeout={self._timeout}s, "
+            f"max_health_wait={self._max_health_wait}s"
         )
+
+    def _get_health_url(self) -> str:
+        """Derive /health URL safely (avoid rstrip mangling)."""
+        base = self._base_url
+        if base.endswith("/v1"):
+            return base[:-3] + "/health"
+        elif base.endswith("/v1/"):
+            return base[:-4] + "/health"
+        else:
+            return base.rstrip("/") + "/health"
+
+    async def _check_health(self) -> bool:
+        """Ping /health endpoint."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self._get_health_url(),
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    return resp.status == 200
+        except Exception:
+            return False
+
+    async def _wait_for_health_shared(self) -> bool:
+        """
+        Shared recovery wait - only one coroutine polls, others block on event.
+        Prevents 50 concurrent requests each waiting 10 min independently.
+        """
+        import time
+
+        # Fast path: if recovery already in progress, wait on event
+        if self._recovery_lock.locked():
+            logger.info("Another coroutine waiting for recovery, joining...")
+            await self._recovery_event.wait()
+            return await self._check_health()  # Verify after event
+
+        # Slow path: we're the first to detect failure, initiate recovery wait
+        async with self._recovery_lock:
+            self._recovery_event.clear()  # Block other coroutines
+            try:
+                start_time = time.time()
+                while (time.time() - start_time) < self._max_health_wait:
+                    if await self._check_health():
+                        logger.info(f"vLLM recovered after {time.time() - start_time:.1f}s")
+                        return True
+                    logger.warning(
+                        f"vLLM unhealthy, waiting... "
+                        f"({time.time() - start_time:.0f}s / {self._max_health_wait}s)"
+                    )
+                    await asyncio.sleep(self._health_poll_interval)
+                return False
+            finally:
+                self._recovery_event.set()  # Unblock waiting coroutines
 
     async def generate_topic_summary(
         self,
         keywords: str,
         sentences: List[str],
         log_prompt: bool = False,
-    ) -> Optional[str]:
+    ) -> str:
         """
         Generate a human-readable summary for a topic.
 
@@ -147,7 +231,10 @@ class XAIClient:
             log_prompt: If True, log the full prompt for debugging
 
         Returns:
-            1-2 sentence summary, or None if generation fails
+            1-2 sentence summary
+
+        Raises:
+            LLMUnavailableError: If LLM is unavailable after retries
         """
         # Limit sentences to avoid token limits
         limited_sentences = sentences[:MAX_SENTENCES_IN_PROMPT]
@@ -168,7 +255,7 @@ class XAIClient:
         theme_keywords: str,
         topic_summaries: List[str],
         log_prompt: bool = False,
-    ) -> Optional[str]:
+    ) -> str:
         """
         Generate a description for a cross-firm theme.
 
@@ -178,7 +265,10 @@ class XAIClient:
             log_prompt: If True, log the full prompt for debugging
 
         Returns:
-            2-3 sentence description, or None if generation fails
+            2-3 sentence description
+
+        Raises:
+            LLMUnavailableError: If LLM is unavailable after retries
         """
         summaries_text = "\n".join(f"- {s}" for s in topic_summaries)
         prompt = THEME_DESCRIPTION_PROMPT.format(
@@ -195,7 +285,7 @@ class XAIClient:
         self,
         topics: List[Dict[str, Any]],
         log_first_prompt: bool = False,
-    ) -> List[Optional[str]]:
+    ) -> List[str]:
         """
         Generate summaries for multiple topics in parallel.
 
@@ -204,7 +294,10 @@ class XAIClient:
             log_first_prompt: If True, log the first prompt for debugging
 
         Returns:
-            List of summaries (None for failed items)
+            List of summaries
+
+        Raises:
+            LLMUnavailableError: If LLM is unavailable after retries
         """
         tasks = [
             self.generate_topic_summary(
@@ -216,15 +309,18 @@ class XAIClient:
         ]
         return await asyncio.gather(*tasks, return_exceptions=False)
 
-    async def _call_llm(self, prompt: str) -> Optional[str]:
+    async def _call_llm(self, prompt: str) -> str:
         """
-        Make an LLM API call with rate limiting and retry logic.
+        Make an LLM API call with rate limiting and health-aware retry logic.
 
         Args:
             prompt: The prompt to send to the LLM
 
         Returns:
-            The LLM response text, or None if all retries fail
+            The LLM response text
+
+        Raises:
+            LLMUnavailableError: If LLM is unavailable after health-aware retry
         """
         async with self._semaphore:
             for attempt in range(self._max_retries):
@@ -233,28 +329,57 @@ class XAIClient:
                         model=self._model,
                         messages=[{"role": "user", "content": prompt}],
                     )
-                    return response.choices[0].message.content
+                    content = response.choices[0].message.content
+                    if content is None:
+                        raise LLMUnavailableError("LLM returned None content", 0)
+                    return content
+
+                except APIConnectionError as e:
+                    # Connection errors = vLLM likely down (most common failure mode)
+                    logger.warning(f"Connection error (vLLM may be down): {e}")
+                    if not await self._check_health():
+                        if not await self._wait_for_health_shared():
+                            raise LLMUnavailableError(
+                                f"vLLM connection failed: {e}", self._max_health_wait
+                            )
+                        continue  # Retry after recovery
+                    # vLLM healthy but connection failed - quick retry
+                    if attempt < self._max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    raise LLMUnavailableError(f"Connection failed after retries: {e}", 0)
 
                 except (RateLimitError, APIStatusError) as e:
-                    # Retry on rate limit (429) or server errors (5xx)
+                    # 4xx client error (not rate limit) - don't retry
                     if isinstance(e, APIStatusError) and e.status_code < 500:
-                        # Client error (4xx except 429) - don't retry
                         if not isinstance(e, RateLimitError):
-                            logger.warning(f"Client error, not retrying: {e}")
-                            return None
+                            raise LLMUnavailableError(f"Client error: {e}", 0)
 
+                    # Server error or rate limit - check health
+                    if not await self._check_health():
+                        if not await self._wait_for_health_shared():
+                            raise LLMUnavailableError(
+                                f"vLLM did not recover: {e}", self._max_health_wait
+                            )
+                        continue
+                    # Quick retry if healthy
                     if attempt < self._max_retries - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff
+                        wait_time = 2 ** attempt
                         logger.warning(
                             f"API error (attempt {attempt + 1}/{self._max_retries}), "
                             f"retrying in {wait_time}s: {e}"
                         )
                         await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"Max retries exhausted: {e}")
-                        return None
+                        continue
+                    raise LLMUnavailableError(f"Max retries exhausted: {e}", 0)
 
                 except APITimeoutError as e:
+                    if not await self._check_health():
+                        if not await self._wait_for_health_shared():
+                            raise LLMUnavailableError(
+                                f"Timeout, vLLM not recovered: {e}", self._max_health_wait
+                            )
+                        continue
                     if attempt < self._max_retries - 1:
                         wait_time = 2 ** attempt
                         logger.warning(
@@ -262,18 +387,18 @@ class XAIClient:
                             f"retrying in {wait_time}s: {e}"
                         )
                         await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"Max retries exhausted after timeout: {e}")
-                        return None
+                        continue
+                    raise LLMUnavailableError(f"Timeout after retries: {e}", 0)
 
                 except APIError as e:
-                    # General API error - log and return None
-                    logger.error(f"API error: {e}")
-                    return None
+                    raise LLMUnavailableError(f"API error: {e}", 0)
+
+                except LLMUnavailableError:
+                    # Re-raise our own exception
+                    raise
 
                 except Exception as e:
-                    # Unexpected error - log and return None
-                    logger.error(f"Unexpected error calling LLM: {e}")
-                    return None
+                    raise LLMUnavailableError(f"Unexpected error: {e}", 0)
 
-        return None
+        # Should never reach here
+        raise LLMUnavailableError("No response after all attempts", 0)

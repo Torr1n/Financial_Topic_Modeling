@@ -147,7 +147,7 @@ resource "aws_autoscaling_group" "vllm" {
   # Use mixed instances policy for Spot
   mixed_instances_policy {
     instances_distribution {
-      on_demand_base_capacity                  = 0
+      on_demand_base_capacity                  = var.on_demand_base_capacity
       on_demand_percentage_above_base_capacity = 100 - var.spot_percentage
       spot_allocation_strategy                 = "capacity-optimized"
     }

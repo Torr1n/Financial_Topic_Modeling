@@ -158,7 +158,7 @@ resource "aws_batch_job_definition" "theme_aggregator" {
   }
 
   timeout {
-    attempt_duration_seconds = 3600  # 1 hour for reduce phase
+    attempt_duration_seconds = 7200  # 2 hours for reduce phase (includes health-aware retry)
   }
 
   tags = {
