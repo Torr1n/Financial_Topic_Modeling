@@ -6,6 +6,7 @@ Tests are written BEFORE implementation (TDD).
 
 import pytest
 import os
+from unittest.mock import patch, MagicMock
 
 
 class TestLocalCSVConnectorInit:
@@ -428,3 +429,204 @@ class TestLocalCSVConnectorMetadata:
 
         metadata = result.firms["1001"].metadata
         assert "n_transcripts" in metadata or len(metadata) >= 0
+
+
+# =============================================================================
+# S3TranscriptConnector Tests
+# =============================================================================
+
+
+class TestS3TranscriptConnectorInit:
+    """Tests for S3TranscriptConnector initialization."""
+
+    def test_implements_data_connector_interface(self):
+        """S3TranscriptConnector should implement DataConnector interface."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+        from cloud.src.interfaces import DataConnector
+
+        assert issubclass(S3TranscriptConnector, DataConnector)
+
+    def test_stores_params(self):
+        """Should store bucket, key, and region."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        connector = S3TranscriptConnector(
+            bucket="my-bucket",
+            key="data/transcripts.csv",
+            region="us-west-2",
+        )
+
+        assert connector.bucket == "my-bucket"
+        assert connector.key == "data/transcripts.csv"
+        assert connector.region == "us-west-2"
+
+    def test_default_region(self):
+        """Region should default to us-east-1."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        connector = S3TranscriptConnector(bucket="b", key="k")
+        assert connector.region == "us-east-1"
+
+    def test_lazy_init_no_download_on_construction(self):
+        """Should NOT download from S3 during __init__."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        # If __init__ tried to contact S3, it would fail since boto3
+        # has no credentials configured. No error means lazy init works.
+        connector = S3TranscriptConnector(bucket="b", key="k")
+        assert connector._local_connector is None
+        assert connector._temp_path is None
+
+
+class TestS3TranscriptConnectorFetchTranscripts:
+    """Tests for S3TranscriptConnector.fetch_transcripts with mocked S3."""
+
+    @patch("cloud.src.connectors.s3_connector.boto3")
+    def test_fetch_downloads_and_delegates(self, mock_boto3, sample_csv_content):
+        """Should download CSV from S3, then delegate to LocalCSVConnector."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+        from cloud.src.models import TranscriptData
+
+        # Configure mock: when download_file is called, write sample CSV to the path
+        mock_s3_client = MagicMock()
+
+        def write_csv_to_dest(bucket, key, dest_path):
+            with open(dest_path, "w") as f:
+                f.write(sample_csv_content)
+
+        mock_s3_client.download_file.side_effect = write_csv_to_dest
+        mock_boto3.client.return_value = mock_s3_client
+
+        connector = S3TranscriptConnector(
+            bucket="test-bucket",
+            key="data/test.csv",
+            region="us-east-1",
+        )
+
+        result = connector.fetch_transcripts(
+            firm_ids=["1001"],
+            start_date="2023-01-01",
+            end_date="2023-03-31",
+        )
+
+        # Verify S3 client was created with correct region
+        mock_boto3.client.assert_called_once_with("s3", region_name="us-east-1")
+
+        # Verify download_file was called with correct bucket and key
+        call_args = mock_s3_client.download_file.call_args
+        assert call_args[0][0] == "test-bucket"
+        assert call_args[0][1] == "data/test.csv"
+
+        # Verify result is valid TranscriptData with expected firm
+        assert isinstance(result, TranscriptData)
+        assert "1001" in result.firms
+        assert result.firms["1001"].firm_name == "Apple Inc."
+
+        # Cleanup
+        connector.close()
+
+    @patch("cloud.src.connectors.s3_connector.boto3")
+    def test_fetch_only_downloads_once(self, mock_boto3, sample_csv_content):
+        """Second call should reuse cached data, not re-download."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        mock_s3_client = MagicMock()
+
+        def write_csv_to_dest(bucket, key, dest_path):
+            with open(dest_path, "w") as f:
+                f.write(sample_csv_content)
+
+        mock_s3_client.download_file.side_effect = write_csv_to_dest
+        mock_boto3.client.return_value = mock_s3_client
+
+        connector = S3TranscriptConnector(bucket="b", key="k")
+
+        # Call twice
+        connector.fetch_transcripts(["1001"], "2023-01-01", "2023-03-31")
+        connector.fetch_transcripts(["1002"], "2023-01-01", "2023-03-31")
+
+        # download_file should only be called once
+        assert mock_s3_client.download_file.call_count == 1
+
+        connector.close()
+
+    @patch("cloud.src.connectors.s3_connector.boto3")
+    def test_get_available_firm_ids_delegates(self, mock_boto3, sample_csv_content):
+        """get_available_firm_ids should download and delegate."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        mock_s3_client = MagicMock()
+
+        def write_csv_to_dest(bucket, key, dest_path):
+            with open(dest_path, "w") as f:
+                f.write(sample_csv_content)
+
+        mock_s3_client.download_file.side_effect = write_csv_to_dest
+        mock_boto3.client.return_value = mock_s3_client
+
+        connector = S3TranscriptConnector(bucket="b", key="k")
+        firm_ids = connector.get_available_firm_ids()
+
+        assert isinstance(firm_ids, list)
+        assert "1001" in firm_ids
+        assert "1002" in firm_ids
+        assert "1003" in firm_ids
+
+        connector.close()
+
+
+class TestS3TranscriptConnectorClose:
+    """Tests for S3TranscriptConnector cleanup."""
+
+    @patch("cloud.src.connectors.s3_connector.boto3")
+    def test_close_removes_temp_file(self, mock_boto3, sample_csv_content):
+        """close() should delete the temp file."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        mock_s3_client = MagicMock()
+
+        def write_csv_to_dest(bucket, key, dest_path):
+            with open(dest_path, "w") as f:
+                f.write(sample_csv_content)
+
+        mock_s3_client.download_file.side_effect = write_csv_to_dest
+        mock_boto3.client.return_value = mock_s3_client
+
+        connector = S3TranscriptConnector(bucket="b", key="k")
+        connector.fetch_transcripts(["1001"], "2023-01-01", "2023-03-31")
+
+        temp_path = connector._temp_path
+        assert os.path.exists(temp_path)
+
+        connector.close()
+
+        assert not os.path.exists(temp_path)
+        assert connector._temp_path is None
+        assert connector._local_connector is None
+
+    def test_close_without_load_is_safe(self):
+        """close() should be safe to call even if no data was loaded."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        connector = S3TranscriptConnector(bucket="b", key="k")
+        connector.close()  # Should not raise
+
+    @patch("cloud.src.connectors.s3_connector.boto3")
+    def test_close_idempotent(self, mock_boto3, sample_csv_content):
+        """Calling close() twice should not raise."""
+        from cloud.src.connectors.s3_connector import S3TranscriptConnector
+
+        mock_s3_client = MagicMock()
+
+        def write_csv_to_dest(bucket, key, dest_path):
+            with open(dest_path, "w") as f:
+                f.write(sample_csv_content)
+
+        mock_s3_client.download_file.side_effect = write_csv_to_dest
+        mock_boto3.client.return_value = mock_s3_client
+
+        connector = S3TranscriptConnector(bucket="b", key="k")
+        connector.fetch_transcripts(["1001"], "2023-01-01", "2023-03-31")
+
+        connector.close()
+        connector.close()  # Should not raise
