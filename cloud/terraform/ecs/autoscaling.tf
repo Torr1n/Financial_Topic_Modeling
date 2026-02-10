@@ -35,7 +35,7 @@ resource "aws_launch_template" "vllm" {
   )
 
   iam_instance_profile {
-    arn = aws_iam_instance_profile.vllm_instance.arn
+    arn = local.vllm_instance_profile_arn
   }
 
   network_interfaces {
@@ -105,7 +105,8 @@ resource "aws_security_group" "vllm_instance" {
 # IAM INSTANCE PROFILE - For EC2 instances in Auto Scaling Group
 # -----------------------------------------------------------------------------
 resource "aws_iam_role" "vllm_instance" {
-  name = "ftm-vllm-instance"
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-vllm-instance"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -119,19 +120,20 @@ resource "aws_iam_role" "vllm_instance" {
   })
 
   tags = {
-    Name    = "ftm-vllm-instance"
-    Project = "financial-topic-modeling"
+    Name = "ftm-vllm-instance"
   }
 }
 
 resource "aws_iam_role_policy_attachment" "vllm_instance_ecs" {
-  role       = aws_iam_role.vllm_instance.name
+  count      = var.use_precreated_roles ? 0 : 1
+  role       = aws_iam_role.vllm_instance[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
 
 resource "aws_iam_instance_profile" "vllm_instance" {
-  name = "ftm-vllm-instance"
-  role = aws_iam_role.vllm_instance.name
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-vllm-instance"
+  role  = aws_iam_role.vllm_instance[0].name
 }
 
 # -----------------------------------------------------------------------------

@@ -1,13 +1,28 @@
 # Smoke Test Procedure
 
-Sprint 7 smoke test for validating LLM integration (map phase) and reduce phase (cross-firm themes).
+Sprint 8 smoke test for validating LLM integration (map phase) and reduce phase (cross-firm themes).
 
 ## Prerequisites
 
-- AWS credentials configured
-- Terraform infrastructure deployed (batch, stepfunctions, ecs modules)
+- AWS credentials configured (`--profile torrin`, account `015705018204`, region `us-west-2`)
+- Terraform infrastructure deployed (batch → ecs → batch+vllm → stepfunctions)
 - Docker installed locally
+- Container image URIs available (from David or self-pushed if ECR push access granted)
 - vLLM ECS service exists (can be scaled to 0)
+
+---
+
+## Phase 0: Pin AWS Profile
+
+```bash
+# CRITICAL: Pin to research account for entire session
+export AWS_PROFILE=torrin
+export AWS_REGION=us-west-2
+export AWS_DEFAULT_REGION=us-west-2
+
+# Verify identity (must show account 015705018204)
+aws sts get-caller-identity
+```
 
 ---
 
@@ -19,45 +34,90 @@ pytest tests/integration/test_batch_integration.py -v -m "not integration"
 
 # 2. Validate Terraform
 cd cloud/terraform/batch && terraform fmt && terraform validate
+cd ../ecs && terraform fmt && terraform validate
 cd ../stepfunctions && terraform fmt && terraform validate
 cd ../../..
 ```
 
 ---
 
-## Phase 2: Infrastructure Updates
+## Phase 2: Build Images (before Terraform apply)
 
 ```bash
-# 3. Get AWS account ID and region
+# 3. Set image URIs FIRST — Terraform apply requires them
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-export AWS_REGION=us-east-1
 
-# 4. Apply Terraform (batch module first - creates reduce ECR + job def)
-cd cloud/terraform/batch
-terraform apply -var="enable_vllm=true"
-cd ../../..
-
-# 5. Build and push MAP container (has LLM integration changes)
+# Option A: David grants ECR push access
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
 docker build -t ftm-map -f cloud/containers/map/Dockerfile .
 docker tag ftm-map:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ftm-map:latest
 docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ftm-map:latest
 
-# 6. Build and push REDUCE container (new)
 docker build -t ftm-reduce -f cloud/containers/reduce/Dockerfile .
 docker tag ftm-reduce:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ftm-reduce:latest
 docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ftm-reduce:latest
 
-# 7. Apply Step Functions changes (wires reduce phase)
+export MAP_IMAGE_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ftm-map:latest"
+export REDUCE_IMAGE_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ftm-reduce:latest"
+
+# Option B: David pre-pushes images — use the URIs he provides
+# export MAP_IMAGE_URI="015705018204.dkr.ecr.us-west-2.amazonaws.com/ftm-map:latest"
+# export REDUCE_IMAGE_URI="015705018204.dkr.ecr.us-west-2.amazonaws.com/ftm-reduce:latest"
+```
+
+---
+
+## Phase 3: Infrastructure Deploy
+
+Deploy order: **batch (no vllm) → ecs → batch (with vllm) → stepfunctions**.
+
+Why two-pass batch? Circular dependency:
+- ECS needs Batch's security group (`ftm-batch-sg`) → Batch must be deployed first
+- Batch with `enable_vllm=true` reads ECS's SSM parameter (`/ftm/vllm/base_url`) → ECS must exist first
+
+```bash
+# 4. Apply Batch module FIRST pass (creates SG, compute env, job defs — WITHOUT vllm)
+cd cloud/terraform/batch
+terraform apply \
+  -var="s3_bucket_name=ubc-torrin" \
+  -var="enable_vllm=false" \
+  -var="use_precreated_roles=true" \
+  -var="use_external_images=true" \
+  -var="map_image_uri=$MAP_IMAGE_URI" \
+  -var="reduce_image_uri=$REDUCE_IMAGE_URI" \
+  -var="enable_wrds_secrets=false"
+cd ../../..
+
+# 5. Apply ECS module (creates vLLM cluster, ALB, ASG, writes SSM parameter)
+cd cloud/terraform/ecs
+terraform apply \
+  -var="use_precreated_roles=true"
+cd ../../..
+
+# 6. Re-apply Batch module SECOND pass (now enable_vllm=true — SSM parameter exists)
+cd cloud/terraform/batch
+terraform apply \
+  -var="s3_bucket_name=ubc-torrin" \
+  -var="enable_vllm=true" \
+  -var="use_precreated_roles=true" \
+  -var="use_external_images=true" \
+  -var="map_image_uri=$MAP_IMAGE_URI" \
+  -var="reduce_image_uri=$REDUCE_IMAGE_URI" \
+  -var="enable_wrds_secrets=false"
+cd ../../..
+
+# 7. Apply Step Functions module (wires orchestration — needs batch job defs and queue)
 cd cloud/terraform/stepfunctions
-terraform apply
+terraform apply \
+  -var="s3_bucket_name=ubc-torrin" \
+  -var="use_precreated_roles=true"
 cd ../../..
 ```
 
 ---
 
-## Phase 3: Run Smoke Test
+## Phase 4: Run Smoke Test
 
 ```bash
 # 8. Scale up vLLM ASG and ECS service (triggers on-demand base capacity)
@@ -73,13 +133,13 @@ export STATE_MACHINE_ARN=$(cd cloud/terraform/stepfunctions && terraform output 
 # 11. Start pipeline execution
 aws stepfunctions start-execution \
   --state-machine-arn $STATE_MACHINE_ARN \
-  --input '{"quarter": "2023Q1", "bucket": "ftm-pipeline-78ea68c8"}' \
+  --input '{"quarter": "2023Q1", "bucket": "ubc-torrin"}' \
   --name "smoke-test-$(date +%Y%m%d-%H%M%S)"
 ```
 
 ---
 
-## Phase 4: Monitor Execution
+## Phase 5: Monitor Execution
 
 ```bash
 # 12. Get execution ARN from output above, then monitor
@@ -89,7 +149,7 @@ export EXECUTION_ARN="<paste-execution-arn-from-step-11>"
 watch -n 30 "aws stepfunctions describe-execution --execution-arn $EXECUTION_ARN --query '{status:status,started:startDate}'"
 
 # Or check Step Functions console:
-# https://console.aws.amazon.com/states/home?region=us-east-1
+# https://console.aws.amazon.com/states/home?region=us-west-2
 
 # 13. Monitor vLLM logs for LLM calls
 aws logs tail /ecs/ftm-vllm --follow --filter-pattern "POST /v1/chat/completions"
@@ -97,11 +157,11 @@ aws logs tail /ecs/ftm-vllm --follow --filter-pattern "POST /v1/chat/completions
 
 ---
 
-## Phase 5: Evaluate Outputs
+## Phase 6: Evaluate Outputs
 
 ```bash
 # 14. After execution completes, check map phase output (topic summaries)
-aws s3 cp s3://ftm-pipeline-78ea68c8/intermediate/firm-topics/quarter=2023Q1/ /tmp/map-output/ --recursive
+aws s3 cp s3://ubc-torrin/intermediate/firm-topics/quarter=2023Q1/ /tmp/map-output/ --recursive
 python3 -c "
 import pandas as pd
 import glob
@@ -114,10 +174,10 @@ print(f'Summary populated: {(df[\"summary\"] != \"\").sum()}/{len(df)}')
 "
 
 # 15. Check reduce phase output (themes + contributions)
-aws s3 ls s3://ftm-pipeline-78ea68c8/processed/themes/quarter=2023Q1/
+aws s3 ls s3://ubc-torrin/processed/themes/quarter=2023Q1/
 
-aws s3 cp s3://ftm-pipeline-78ea68c8/processed/themes/quarter=2023Q1/themes.parquet /tmp/
-aws s3 cp s3://ftm-pipeline-78ea68c8/processed/themes/quarter=2023Q1/theme_contributions.parquet /tmp/
+aws s3 cp s3://ubc-torrin/processed/themes/quarter=2023Q1/themes.parquet /tmp/
+aws s3 cp s3://ubc-torrin/processed/themes/quarter=2023Q1/theme_contributions.parquet /tmp/
 
 python3 -c "
 import pandas as pd
@@ -136,7 +196,7 @@ print(contribs[['theme_id', 'firm_name', 'permno', 'earnings_call_date']].head()
 
 ---
 
-## Phase 6: Cleanup
+## Phase 7: Cleanup
 
 ```bash
 # 16. Scale down vLLM ECS service and ASG (cost savings)
@@ -207,8 +267,8 @@ aws logs tail /ecs/ftm-vllm --since 10m
 aws logs tail /aws/batch/ftm --since 30m --filter-pattern "ERROR"
 
 # Check failures manifest
-aws s3 ls s3://ftm-pipeline-78ea68c8/progress/2023Q1/
-aws s3 cp s3://ftm-pipeline-78ea68c8/progress/2023Q1/<batch_id>_failures.json -
+aws s3 ls s3://ubc-torrin/progress/2023Q1/
+aws s3 cp s3://ubc-torrin/progress/2023Q1/<batch_id>_failures.json -
 ```
 
 ### Reduce phase fails
@@ -278,4 +338,4 @@ aws logs tail /aws/batch/ftm --follow --filter-pattern "vLLM"
 
 ---
 
-_Last updated: Sprint 7 (2026-02-02)_
+_Last updated: Sprint 8 - Research Account Migration (2026-02-09)_

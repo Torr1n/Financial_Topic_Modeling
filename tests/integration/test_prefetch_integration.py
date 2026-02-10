@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 
 # Test bucket (should be set for integration tests)
-TEST_BUCKET = os.environ.get("FTM_TEST_BUCKET", "ftm-pipeline-78ea68c8")
+TEST_BUCKET = os.environ.get("FTM_TEST_BUCKET", "ubc-torrin")
 
 
 class TestPrefetchToS3Integration:

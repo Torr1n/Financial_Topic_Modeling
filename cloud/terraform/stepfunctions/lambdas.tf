@@ -26,7 +26,7 @@ resource "aws_lambda_function" "prefetch_check" {
   timeout = var.lambda_timeout
   memory_size = var.lambda_memory_size
 
-  role = aws_iam_role.lambda_execution.arn
+  role = local.lambda_execution_role_arn
 
   environment {
     variables = {
@@ -61,7 +61,7 @@ resource "aws_lambda_function" "create_batch_manifest" {
   timeout = var.lambda_timeout
   memory_size = var.lambda_memory_size
 
-  role = aws_iam_role.lambda_execution.arn
+  role = local.lambda_execution_role_arn
 
   environment {
     variables = {
@@ -97,7 +97,7 @@ resource "aws_lambda_function" "summarize_results" {
   timeout     = var.lambda_timeout
   memory_size = var.lambda_memory_size
 
-  role = aws_iam_role.lambda_execution.arn
+  role = local.lambda_execution_role_arn
 
   tags = {
     Name    = "ftm-summarize-results"
@@ -126,7 +126,7 @@ resource "aws_lambda_function" "notify_completion" {
   timeout = var.lambda_timeout
   memory_size = var.lambda_memory_size
 
-  role = aws_iam_role.lambda_execution.arn
+  role = local.lambda_execution_role_arn
 
   environment {
     variables = {

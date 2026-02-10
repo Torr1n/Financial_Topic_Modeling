@@ -1,11 +1,42 @@
 # Financial Topic Modeling - Batch IAM Roles
 # Five roles: batch_service, batch_execution, batch_job, batch_instance, spot_fleet
+#
+# When use_precreated_roles=true (default for research account):
+#   - Skips role creation, uses precreated role ARNs via data sources
+# When use_precreated_roles=false (original behavior):
+#   - Creates all roles and policies as before
+
+# -----------------------------------------------------------------------------
+# LOCALS - Resolve to either precreated or self-managed role ARNs
+# Note: We construct ARNs directly instead of using data sources because
+# the research account doesn't have iam:GetRole permission.
+# -----------------------------------------------------------------------------
+locals {
+  account_id = data.aws_caller_identity.current.account_id
+
+  batch_execution_role_arn = var.use_precreated_roles ? "arn:aws:iam::${local.account_id}:role/${var.precreated_batch_execution_role_name}" : aws_iam_role.batch_execution[0].arn
+  batch_job_role_arn       = var.use_precreated_roles ? "arn:aws:iam::${local.account_id}:role/${var.precreated_batch_job_role_name}" : aws_iam_role.batch_job[0].arn
+
+  # service_role and spot_fleet_role: set to null when using precreated roles.
+  # AWS Batch automatically uses its service-linked role (AWSServiceRoleForBatch)
+  # when service_role is unset. This avoids needing iam:PassRole for these roles.
+  batch_service_role_arn     = var.use_precreated_roles ? null : aws_iam_role.batch_service[0].arn
+  spot_fleet_role_arn        = var.use_precreated_roles ? null : aws_iam_role.spot_fleet[0].arn
+
+  # Instance profile: constructed from explicit variable (not inferred from role name)
+  batch_instance_profile_arn = var.use_precreated_roles ? "arn:aws:iam::${local.account_id}:instance-profile/${var.precreated_batch_instance_profile_name}" : aws_iam_instance_profile.batch_instance[0].arn
+}
+
+# =============================================================================
+# SELF-MANAGED ROLES (only created when use_precreated_roles=false)
+# =============================================================================
 
 # -----------------------------------------------------------------------------
 # BATCH SERVICE ROLE - Used by AWS Batch to manage compute resources
 # -----------------------------------------------------------------------------
 resource "aws_iam_role" "batch_service" {
-  name = "ftm-batch-service"
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-batch-service"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -19,13 +50,13 @@ resource "aws_iam_role" "batch_service" {
   })
 
   tags = {
-    Name    = "ftm-batch-service"
-    Project = "financial-topic-modeling"
+    Name = "ftm-batch-service"
   }
 }
 
 resource "aws_iam_role_policy_attachment" "batch_service" {
-  role       = aws_iam_role.batch_service.name
+  count      = var.use_precreated_roles ? 0 : 1
+  role       = aws_iam_role.batch_service[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole"
 }
 
@@ -33,7 +64,8 @@ resource "aws_iam_role_policy_attachment" "batch_service" {
 # BATCH EXECUTION ROLE - ECS task execution (ECR pull, Secrets Manager, CloudWatch)
 # -----------------------------------------------------------------------------
 resource "aws_iam_role" "batch_execution" {
-  name = "ftm-batch-execution"
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-batch-execution"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -47,23 +79,22 @@ resource "aws_iam_role" "batch_execution" {
   })
 
   tags = {
-    Name    = "ftm-batch-execution"
-    Project = "financial-topic-modeling"
+    Name = "ftm-batch-execution"
   }
 }
 
 # Basic ECS execution role policy (ECR, CloudWatch)
 resource "aws_iam_role_policy_attachment" "batch_execution_ecs" {
-  role       = aws_iam_role.batch_execution.name
+  count      = var.use_precreated_roles ? 0 : 1
+  role       = aws_iam_role.batch_execution[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 # Secrets Manager access for WRDS credentials
-# Note: kms:Decrypt included for customer-managed KMS keys.
-# If using AWS-managed key (default), kms:Decrypt is not required but harmless.
 resource "aws_iam_role_policy" "batch_execution_secrets" {
-  name = "ftm-batch-execution-secrets"
-  role = aws_iam_role.batch_execution.id
+  count = var.use_precreated_roles ? 0 : (var.enable_wrds_secrets ? 1 : 0)
+  name  = "ftm-batch-execution-secrets"
+  role  = aws_iam_role.batch_execution[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -73,7 +104,7 @@ resource "aws_iam_role_policy" "batch_execution_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [data.aws_secretsmanager_secret.wrds.arn]
+        Resource = [data.aws_secretsmanager_secret.wrds[0].arn]
       },
       {
         Effect = "Allow"
@@ -95,7 +126,8 @@ resource "aws_iam_role_policy" "batch_execution_secrets" {
 # BATCH JOB ROLE - Used by running containers (S3 read/write)
 # -----------------------------------------------------------------------------
 resource "aws_iam_role" "batch_job" {
-  name = "ftm-batch-job"
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-batch-job"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -109,15 +141,15 @@ resource "aws_iam_role" "batch_job" {
   })
 
   tags = {
-    Name    = "ftm-batch-job"
-    Project = "financial-topic-modeling"
+    Name = "ftm-batch-job"
   }
 }
 
 # S3 access for manifests, checkpoints, prefetch data, intermediate, and processed output
 resource "aws_iam_role_policy" "batch_job_s3" {
-  name = "ftm-batch-job-s3"
-  role = aws_iam_role.batch_job.id
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-batch-job-s3"
+  role  = aws_iam_role.batch_job[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -160,10 +192,10 @@ resource "aws_iam_role_policy" "batch_job_s3" {
 }
 
 # Secrets Manager access for WRDS credentials (fallback auth in WRDSConnector)
-# This allows the job to fetch credentials if env var injection fails or for local testing.
 resource "aws_iam_role_policy" "batch_job_secrets" {
-  name = "ftm-batch-job-secrets"
-  role = aws_iam_role.batch_job.id
+  count = var.use_precreated_roles ? 0 : (var.enable_wrds_secrets ? 1 : 0)
+  name  = "ftm-batch-job-secrets"
+  role  = aws_iam_role.batch_job[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -173,7 +205,7 @@ resource "aws_iam_role_policy" "batch_job_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [data.aws_secretsmanager_secret.wrds.arn]
+        Resource = [data.aws_secretsmanager_secret.wrds[0].arn]
       },
       {
         Effect = "Allow"
@@ -192,11 +224,10 @@ resource "aws_iam_role_policy" "batch_job_secrets" {
 }
 
 # SSM Parameter Store access for vLLM configuration
-# Allows job to read vLLM base URL if deployed (optional)
 resource "aws_iam_role_policy" "batch_job_ssm" {
-  count = var.enable_vllm ? 1 : 0
+  count = var.use_precreated_roles ? 0 : (var.enable_vllm ? 1 : 0)
   name  = "ftm-batch-job-ssm"
-  role  = aws_iam_role.batch_job.id
+  role  = aws_iam_role.batch_job[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -219,7 +250,8 @@ resource "aws_iam_role_policy" "batch_job_ssm" {
 # BATCH INSTANCE ROLE - EC2 instances in compute environment
 # -----------------------------------------------------------------------------
 resource "aws_iam_role" "batch_instance" {
-  name = "ftm-batch-instance"
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-batch-instance"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -233,28 +265,30 @@ resource "aws_iam_role" "batch_instance" {
   })
 
   tags = {
-    Name    = "ftm-batch-instance"
-    Project = "financial-topic-modeling"
+    Name = "ftm-batch-instance"
   }
 }
 
 # ECS container instance policy (required for Batch)
 resource "aws_iam_role_policy_attachment" "batch_instance_ecs" {
-  role       = aws_iam_role.batch_instance.name
+  count      = var.use_precreated_roles ? 0 : 1
+  role       = aws_iam_role.batch_instance[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
 
 # Instance profile for EC2 instances
 resource "aws_iam_instance_profile" "batch_instance" {
-  name = "ftm-batch-instance"
-  role = aws_iam_role.batch_instance.name
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-batch-instance"
+  role  = aws_iam_role.batch_instance[0].name
 }
 
 # -----------------------------------------------------------------------------
 # SPOT FLEET ROLE - For Spot instance management
 # -----------------------------------------------------------------------------
 resource "aws_iam_role" "spot_fleet" {
-  name = "ftm-spot-fleet"
+  count = var.use_precreated_roles ? 0 : 1
+  name  = "ftm-spot-fleet"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -268,12 +302,12 @@ resource "aws_iam_role" "spot_fleet" {
   })
 
   tags = {
-    Name    = "ftm-spot-fleet"
-    Project = "financial-topic-modeling"
+    Name = "ftm-spot-fleet"
   }
 }
 
 resource "aws_iam_role_policy_attachment" "spot_fleet" {
-  role       = aws_iam_role.spot_fleet.name
+  count      = var.use_precreated_roles ? 0 : 1
+  role       = aws_iam_role.spot_fleet[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole"
 }

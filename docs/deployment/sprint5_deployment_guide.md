@@ -24,7 +24,7 @@ aws sts get-caller-identity
 # Get your S3 bucket name (from main terraform)
 cd cloud/terraform
 terraform output s3_bucket_name
-# Example output: ftm-pipeline-78ea68c8
+# Example output: ubc-torrin
 
 # Verify Batch infrastructure
 aws batch describe-job-queues --job-queues ftm-queue-main
@@ -51,7 +51,7 @@ aws batch describe-job-definitions --job-definition-name ftm-firm-processor --st
 cd cloud/terraform/ecs
 
 terraform init
-terraform plan -var="aws_region=us-east-1"
+terraform plan -var="aws_region=us-west-2"
 ```
 
 ### 1.2 Review Plan
@@ -68,7 +68,7 @@ Expect ~22 resources:
 ### 1.3 Apply
 
 ```bash
-terraform apply -var="aws_region=us-east-1"
+terraform apply -var="aws_region=us-west-2"
 ```
 
 ### 1.4 Verify Deployment
@@ -115,8 +115,8 @@ Health: 200 OK (heartbeat active)
 cd cloud/terraform/batch
 
 # Replace with your actual bucket name
-terraform plan -var="s3_bucket_name=ftm-pipeline-78ea68c8" -var="enable_vllm=true"
-terraform apply -var="s3_bucket_name=ftm-pipeline-78ea68c8" -var="enable_vllm=true"
+terraform plan -var="s3_bucket_name=ubc-torrin" -var="enable_vllm=true"
+terraform apply -var="s3_bucket_name=ubc-torrin" -var="enable_vllm=true"
 ```
 
 ### 2.2 Verify Job Definition Updated
@@ -139,7 +139,7 @@ cd cloud/terraform/stepfunctions
 
 terraform init
 terraform plan \
-  -var="s3_bucket_name=ftm-pipeline-78ea68c8" \
+  -var="s3_bucket_name=ubc-torrin" \
   -var="job_queue_name=ftm-queue-main" \
   -var="job_definition_name=ftm-firm-processor"
 ```
@@ -156,7 +156,7 @@ Expect ~18 resources:
 
 ```bash
 terraform apply \
-  -var="s3_bucket_name=ftm-pipeline-78ea68c8" \
+  -var="s3_bucket_name=ubc-torrin" \
   -var="job_queue_name=ftm-queue-main" \
   -var="job_definition_name=ftm-firm-processor"
 ```
@@ -178,13 +178,13 @@ Save the `state_machine_arn` and `console_url` for later use.
 ```bash
 # Test prefetch check (should return exists: true/false)
 aws lambda invoke --function-name ftm-prefetch-check \
-  --payload '{"quarter": "2023Q1", "bucket": "ftm-pipeline-78ea68c8"}' \
+  --payload '{"quarter": "2023Q1", "bucket": "ubc-torrin"}' \
   --cli-binary-format raw-in-base64-out \
   /dev/stdout
 
 # Test batch manifest creation (only if prefetch exists)
 aws lambda invoke --function-name ftm-create-batch-manifest \
-  --payload '{"quarter": "2023Q1", "bucket": "ftm-pipeline-78ea68c8", "batch_size": 100}' \
+  --payload '{"quarter": "2023Q1", "bucket": "ubc-torrin", "batch_size": 100}' \
   --cli-binary-format raw-in-base64-out \
   /dev/stdout
 ```
@@ -193,12 +193,12 @@ aws lambda invoke --function-name ftm-create-batch-manifest \
 
 ```bash
 # Start execution with a quarter that has prefetch data
-STATE_MACHINE_ARN="arn:aws:states:us-east-1:666938415731:stateMachine:ftm-quarter-processor"
+STATE_MACHINE_ARN="arn:aws:states:us-west-2:015705018204:stateMachine:ftm-quarter-processor"
 
 aws stepfunctions start-execution \
   --state-machine-arn $STATE_MACHINE_ARN \
   --name "test-$(date +%Y%m%d-%H%M%S)" \
-  --input '{"quarter": "2023Q1", "bucket": "ftm-pipeline-78ea68c8", "batch_size": 100}'
+  --input '{"quarter": "2023Q1", "bucket": "ubc-torrin", "batch_size": 100}'
 ```
 
 ### 4.3 Monitor Execution
@@ -289,7 +289,7 @@ aws logs tail /ecs/ftm-vllm --since 30m
 ```bash
 python -c "
 from cloud.src.orchestrate.quarter_orchestrator import QuarterOrchestrator
-o = QuarterOrchestrator('ftm-pipeline-78ea68c8', 'ftm-firm-processor', 'ftm-queue-main')
+o = QuarterOrchestrator('ubc-torrin', 'ftm-firm-processor', 'ftm-queue-main')
 o.run_prefetch('2023Q1')
 "
 ```
@@ -324,17 +324,17 @@ sleep 60
 # 2. Destroy Step Functions
 cd cloud/terraform/stepfunctions
 terraform destroy \
-  -var="s3_bucket_name=ftm-pipeline-78ea68c8" \
+  -var="s3_bucket_name=ubc-torrin" \
   -var="job_queue_name=ftm-queue-main" \
   -var="job_definition_name=ftm-firm-processor"
 
 # 3. Revert Batch module (disable vLLM)
 cd cloud/terraform/batch
-terraform apply -var="s3_bucket_name=ftm-pipeline-78ea68c8" -var="enable_vllm=false"
+terraform apply -var="s3_bucket_name=ubc-torrin" -var="enable_vllm=false"
 
 # 4. Destroy ECS
 cd cloud/terraform/ecs
-terraform destroy -var="aws_region=us-east-1"
+terraform destroy -var="aws_region=us-west-2"
 ```
 
 ---
@@ -345,7 +345,7 @@ terraform destroy -var="aws_region=us-east-1"
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `aws_region` | us-east-1 | AWS region |
+| `aws_region` | us-west-2 | AWS region |
 | `vllm_model` | Qwen/Qwen3-8B | HuggingFace model ID |
 | `instance_type` | g5.xlarge | GPU instance type |
 | `min_capacity` | 1 | Minimum ASG capacity |

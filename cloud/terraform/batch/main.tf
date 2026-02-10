@@ -14,6 +14,13 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = {
+      Owner   = "Torrin"
+      Project = "financial-topic-modeling"
+    }
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -43,8 +50,10 @@ data "aws_s3_bucket" "pipeline" {
 
 # Reference WRDS secret (created out-of-band, not in terraform state)
 # Create manually: aws secretsmanager create-secret --name wrds-credentials ...
+# Gated: only looked up when enable_wrds_secrets=true
 data "aws_secretsmanager_secret" "wrds" {
-  name = "wrds-credentials"
+  count = var.enable_wrds_secrets ? 1 : 0
+  name  = "wrds-credentials"
 }
 
 # Get current AWS account ID for IAM policies

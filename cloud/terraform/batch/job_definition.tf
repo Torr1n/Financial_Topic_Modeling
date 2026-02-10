@@ -22,8 +22,16 @@ resource "aws_batch_job_definition" "firm_processor" {
 
   platform_capabilities = ["EC2"]
 
+  # Fail early if external images are enabled but URI is empty
+  lifecycle {
+    precondition {
+      condition     = !var.use_external_images || length(var.map_image_uri) > 0
+      error_message = "map_image_uri must be set when use_external_images=true. Provide the full ECR image URI (e.g., 015705018204.dkr.ecr.us-west-2.amazonaws.com/ftm-map:latest)."
+    }
+  }
+
   container_properties = jsonencode({
-    image = "${aws_ecr_repository.map.repository_url}:latest"
+    image = local.map_image
 
     resourceRequirements = [
       { type = "VCPU", value = "4" },
@@ -48,17 +56,17 @@ resource "aws_batch_job_definition" "firm_processor" {
       ] : []
     )
 
-    # WRDS credentials injected from Secrets Manager
-    secrets = [
+    # WRDS credentials injected from Secrets Manager (gated by enable_wrds_secrets)
+    secrets = var.enable_wrds_secrets ? [
       {
         name      = "WRDS_USERNAME"
-        valueFrom = "${data.aws_secretsmanager_secret.wrds.arn}:username::"
+        valueFrom = "${data.aws_secretsmanager_secret.wrds[0].arn}:username::"
       },
       {
         name      = "WRDS_PASSWORD"
-        valueFrom = "${data.aws_secretsmanager_secret.wrds.arn}:password::"
+        valueFrom = "${data.aws_secretsmanager_secret.wrds[0].arn}:password::"
       }
-    ]
+    ] : []
 
     logConfiguration = {
       logDriver = "awslogs"
@@ -69,8 +77,8 @@ resource "aws_batch_job_definition" "firm_processor" {
       }
     }
 
-    executionRoleArn = aws_iam_role.batch_execution.arn
-    jobRoleArn       = aws_iam_role.batch_job.arn
+    executionRoleArn = local.batch_execution_role_arn
+    jobRoleArn       = local.batch_job_role_arn
   })
 
   retry_strategy {
@@ -109,8 +117,16 @@ resource "aws_batch_job_definition" "theme_aggregator" {
 
   platform_capabilities = ["EC2"]
 
+  # Fail early if external images are enabled but URI is empty
+  lifecycle {
+    precondition {
+      condition     = !var.use_external_images || length(var.reduce_image_uri) > 0
+      error_message = "reduce_image_uri must be set when use_external_images=true. Provide the full ECR image URI (e.g., 015705018204.dkr.ecr.us-west-2.amazonaws.com/ftm-reduce:latest)."
+    }
+  }
+
   container_properties = jsonencode({
-    image = "${aws_ecr_repository.reduce.repository_url}:latest"
+    image = local.reduce_image
 
     resourceRequirements = [
       { type = "VCPU", value = "4" },
@@ -140,8 +156,8 @@ resource "aws_batch_job_definition" "theme_aggregator" {
       }
     }
 
-    executionRoleArn = aws_iam_role.batch_execution.arn
-    jobRoleArn       = aws_iam_role.batch_job.arn
+    executionRoleArn = local.batch_execution_role_arn
+    jobRoleArn       = local.batch_job_role_arn
   })
 
   retry_strategy {

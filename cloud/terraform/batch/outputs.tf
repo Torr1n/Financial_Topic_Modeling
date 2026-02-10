@@ -1,14 +1,24 @@
 # Financial Topic Modeling - Batch Infrastructure Outputs
 # Used by deployment scripts and job submitter
 
+output "map_image_uri" {
+  description = "Container image URI for map phase"
+  value       = local.map_image
+}
+
+output "reduce_image_uri" {
+  description = "Container image URI for reduce phase"
+  value       = local.reduce_image
+}
+
 output "ecr_repository_url" {
-  description = "ECR repository URL for pushing container images"
-  value       = aws_ecr_repository.map.repository_url
+  description = "ECR repository URL for pushing map container images (empty if using external images)"
+  value       = var.use_external_images ? "" : aws_ecr_repository.map[0].repository_url
 }
 
 output "ecr_repository_name" {
-  description = "ECR repository name"
-  value       = aws_ecr_repository.map.name
+  description = "ECR repository name (empty if using external images)"
+  value       = var.use_external_images ? "" : aws_ecr_repository.map[0].name
 }
 
 output "job_definition_name" {
@@ -48,13 +58,13 @@ output "s3_bucket_name" {
 
 # Reduce phase outputs
 output "reduce_ecr_repository_url" {
-  description = "ECR repository URL for reduce phase container images"
-  value       = aws_ecr_repository.reduce.repository_url
+  description = "ECR repository URL for reduce phase (empty if using external images)"
+  value       = var.use_external_images ? "" : aws_ecr_repository.reduce[0].repository_url
 }
 
 output "reduce_ecr_repository_name" {
-  description = "ECR repository name for reduce phase"
-  value       = aws_ecr_repository.reduce.name
+  description = "ECR repository name for reduce phase (empty if using external images)"
+  value       = var.use_external_images ? "" : aws_ecr_repository.reduce[0].name
 }
 
 output "reduce_job_definition_name" {

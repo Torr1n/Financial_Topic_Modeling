@@ -18,7 +18,7 @@ resource "aws_cloudwatch_log_group" "sfn" {
 # -----------------------------------------------------------------------------
 resource "aws_sfn_state_machine" "quarter_processor" {
   name     = "ftm-quarter-processor"
-  role_arn = aws_iam_role.sfn_execution.arn
+  role_arn = local.sfn_execution_role_arn
 
   definition = templatefile("${path.module}/state_machine.json", {
     prefetch_check_arn           = aws_lambda_function.prefetch_check.arn

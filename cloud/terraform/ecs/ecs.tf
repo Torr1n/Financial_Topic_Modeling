@@ -37,8 +37,8 @@ resource "aws_ecs_task_definition" "vllm" {
   family                   = "ftm-vllm"
   requires_compatibilities = ["EC2"]
   network_mode             = "host"  # Use host network for internet access (HuggingFace downloads)
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task.arn
+  execution_role_arn       = local.ecs_execution_role_arn
+  task_role_arn            = local.ecs_task_role_arn
 
   # Note: For host network mode, cpu/memory must be in container definition, not task level
 

@@ -3,7 +3,7 @@
 variable "aws_region" {
   description = "AWS region for deployment"
   type        = string
-  default     = "us-east-1"
+  default     = "us-west-2"
 }
 
 variable "s3_bucket_name" {
@@ -57,4 +57,26 @@ variable "lambda_timeout" {
   description = "Timeout for Lambda functions in seconds"
   type        = number
   default     = 60
+}
+
+# -----------------------------------------------------------------------------
+# RESEARCH ACCOUNT COMPATIBILITY
+# -----------------------------------------------------------------------------
+
+variable "use_precreated_roles" {
+  description = "Use precreated IAM roles instead of creating new ones (for restricted accounts)"
+  type        = bool
+  default     = true
+}
+
+variable "precreated_lambda_execution_role_name" {
+  description = "Name of precreated Lambda execution role"
+  type        = string
+  default     = "role-torrin-lambda-exec"
+}
+
+variable "precreated_sfn_execution_role_name" {
+  description = "Name of precreated Step Functions execution role"
+  type        = string
+  default     = "role-torrin-sfn-exec"
 }
